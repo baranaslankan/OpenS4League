@@ -130,7 +130,11 @@ namespace OpenS4L.Server.Mapping.Tests
             return gds;
         }
 
-        public static PlayerItem CreatePlayerItem(GameDataService gds)
+        /// <summary>
+        /// A 30-day item bought at unix 1700000000 (long expired) unless <paramref name="purchaseDate"/>
+        /// says otherwise.
+        /// </summary>
+        public static PlayerItem CreatePlayerItem(GameDataService gds, DateTimeOffset? purchaseDate = null)
         {
             var inventory = new PlayerInventory(
                 new Logger<PlayerInventory>(),
@@ -142,7 +146,8 @@ namespace OpenS4L.Server.Mapping.Tests
             return new PlayerItem(
                 gds, inventory, 9001,
                 Stash.ShopItemInfo, Stash.ShopPrice,
-                color: 2, effects: new uint[] { 1 }, purchaseDate: DateTimeOffset.FromUnixTimeSeconds(1700000000));
+                color: 2, effects: new uint[] { 1 },
+                purchaseDate: purchaseDate ?? DateTimeOffset.FromUnixTimeSeconds(1700000000));
         }
 
         public static RoomCreationOptions CreateRoomCreationOptions()
@@ -232,6 +237,27 @@ namespace OpenS4L.Server.Mapping.Tests
         }
 
         public static OpenS4L.Server.Game.Mappers.GameMapper CreateMapper() => new();
+
+        /// <summary>
+        /// Adds a PEN price group with the given (period type, period) prices, like the provisioned
+        /// shop with day periods on. Price ids are <paramref name="id"/> * 100 + index.
+        /// </summary>
+        public static int SeedPeriodPriceGroup(GameDataService gds, int id, params (ItemPeriodType type, ushort period)[] prices)
+        {
+            var group = new ShopPriceGroup(new ShopPriceGroupEntity
+            {
+                Id = id,
+                PriceType = (byte)ItemPriceType.PEN,
+                Name = "periods" + id,
+                ShopPrices = prices.Select((p, i) => new ShopPriceEntity
+                {
+                    Id = id * 100 + i, PriceGroupId = id, PeriodType = (byte)p.type,
+                    Period = p.period, Price = 100, IsRefundable = true, Durability = 2400, IsEnabled = true
+                }).ToList()
+            });
+            Set(gds, "ShopPrices", gds.ShopPrices.SetItem(id, group));
+            return id;
+        }
 
         /// <summary>Replaces the map table (the default fixture only has map 3 = Practice).</summary>
         public static void SetMaps(GameDataService gds, params MapInfo[] maps)

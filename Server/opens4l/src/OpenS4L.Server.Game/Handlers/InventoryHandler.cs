@@ -217,7 +217,8 @@ namespace OpenS4L.Server.Game.Handlers
                 return true;
             }
 
-            if (!shopItem.IsDestroyable)
+            // An expired period item can always be thrown away.
+            if (!shopItem.IsDestroyable && !item.IsExpired)
             {
                 logger.Warning("Cannot discard item={ItemId}", message.ItemId);
                 session.Send(new ItemDiscardItemAckMessage(2, 0));

@@ -26,6 +26,9 @@ namespace OpenS4L.Server.Game
         private readonly GameMapper _mapper;
         private readonly ConcurrentDictionary<ulong, PlayerItem> _items;
         private readonly ConcurrentStack<PlayerItem> _itemsToRemove;
+        // Period items already handled as expired (unequipped, client told) - in memory only, the
+        // expiry itself is derived from PurchaseDate + period so nothing needs persisting.
+        private readonly ConcurrentDictionary<ulong, byte> _expiredItems = new ConcurrentDictionary<ulong, byte>();
         private ILogger _logger;
 
         public Player Player { get; private set; }
@@ -78,7 +81,38 @@ namespace OpenS4L.Server.Game
                     continue;
                 }
                 _items.TryAdd(item.Id, item);
+
+                // Already expired at login: the inventory list carries the expiry, so the client shows
+                // it as expired by itself; Character skips equipping it.
+                if (item.IsExpired)
+                    _expiredItems.TryAdd(item.Id, 0);
             }
+        }
+
+        /// <summary>
+        /// Handles period items whose time ran out: unequips them from their character (the client gets
+        /// the usual UnEquip ack) and sends the refreshed item once, so it shows as expired. Expired
+        /// items stay in the inventory like on the original server; they just stop working.
+        /// Returns the items that changed.
+        /// </summary>
+        public IReadOnlyList<PlayerItem> UpdateExpiredItems(DateTimeOffset now)
+        {
+            var changed = new List<PlayerItem>();
+            foreach (var item in _items.Values)
+            {
+                if (!item.IsExpiredAt(now))
+                    continue;
+
+                var unequipped = item.CharacterInventory?.Remove(item) == true;
+                var newlyExpired = _expiredItems.TryAdd(item.Id, 0);
+                if (newlyExpired)
+                    Player.Session.Send(new ItemUpdateInventoryAckMessage(InventoryAction.Update, _mapper.ToItemDto(item)));
+
+                if (newlyExpired || unequipped)
+                    changed.Add(item);
+            }
+
+            return changed;
         }
 
         /// <summary>
@@ -234,6 +268,10 @@ namespace OpenS4L.Server.Game
                 return null;
 
             // Listings hidden from the shop still count: capsules can give items that aren't sold.
+            // The visible listing wins over a hidden one even when only the hidden one has the exact
+            // period: PlayerItem resolves its listing by item number + price type (the first one), so
+            // an item created from another listing could not be saved. The provisioned shop has one
+            // listing per item, whose price group carries permanent + the day periods.
             var choice = shopItem.ItemInfos
                 .Where(info => info.PriceGroup != null)
                 .SelectMany(info => info.PriceGroup.Prices.Where(p => p.IsEnabled).Select(price => (info, price)))
@@ -270,6 +308,7 @@ namespace OpenS4L.Server.Game
                 return false;
 
             _items.Remove(item.Id);
+            _expiredItems.TryRemove(item.Id, out _);
             if (item.Exists)
                 _itemsToRemove.Push(item);
 

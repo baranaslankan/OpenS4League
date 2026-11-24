@@ -180,6 +180,7 @@ namespace OpenS4L.Server.Game
                         .AddHostedServiceEx<IpcService>()
                         .AddHostedServiceEx<PlayerSaveService>()
                         .AddHostedServiceEx<PlayerSaveFlushService>()
+                        .AddHostedServiceEx<ItemExpiryService>()
                         .AddHostedServiceEx<CommandService>();
 
                     pluginHost.OnConfigure(services);

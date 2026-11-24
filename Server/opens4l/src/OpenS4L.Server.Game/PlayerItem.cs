@@ -32,8 +32,20 @@ namespace OpenS4L.Server.Game
             get => _durability;
             set => SetIfChanged(ref _durability, value);
         }
+        /// <summary>
+        /// When a timed (hour/day period) item runs out; MinValue for items without an expiry.
+        /// </summary>
         public DateTimeOffset ExpireDate =>
-            PeriodType == ItemPeriodType.Days ? PurchaseDate.AddDays(Period) : DateTimeOffset.MinValue;
+            PeriodType == ItemPeriodType.Days ? PurchaseDate.AddDays(Period)
+            : PeriodType == ItemPeriodType.Hours ? PurchaseDate.AddHours(Period)
+            : DateTimeOffset.MinValue;
+
+        /// <summary>True for hour/day period items, which expire at <see cref="ExpireDate"/>.</summary>
+        public bool HasExpireDate => PeriodType == ItemPeriodType.Days || PeriodType == ItemPeriodType.Hours;
+
+        public bool IsExpired => IsExpiredAt(DateTimeOffset.Now);
+
+        public bool IsExpiredAt(DateTimeOffset now) => HasExpireDate && now >= ExpireDate;
         public uint EnchantMP
         {
             get => _enchantMP;
