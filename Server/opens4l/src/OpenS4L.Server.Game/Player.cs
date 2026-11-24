@@ -263,14 +263,24 @@ namespace OpenS4L.Server.Game
                 leveledUp = true;
             }
 
-            if (!leveledUp)
-                return false;
+            // The client is not told here: callers send SendExperienceUpdate() when it fits
+            // (the match result sends it after the result briefing).
+            // The chat server is updated by Room on GameState.Result (PlayerUpdateMessage).
+            return leveledUp;
+        }
 
-            // TODO Update chat server
-            // TODO Do we need this?
-            // Session.Send(new SBeginAccountInfoAckMessage())
-
-            return true;
+        /// <summary>
+        /// Refreshes the lobby EXP bar/level after the experience changed.
+        /// Without this the client only learns the experience at login (PlayerAccountInfoAck).
+        /// </summary>
+        public void SendExperienceUpdate()
+        {
+            // The single field of ExpRefreshInfoAck is unconfirmed; GameOptions.ExpRefreshUsesAccountInfo
+            // switches to re-sending the login account info, which is known to fill the bar
+            if (_gameOptions.ExpRefreshUsesAccountInfo)
+                Session.Send(new PlayerAccountInfoAckMessage(CreateAccountInfoDto()));
+            else
+                Session.Send(new ExpRefreshInfoAckMessage { Unk = (int)TotalExperience });
         }
 
         public TimeSpan GetCurrentPlayTime()
@@ -400,7 +410,14 @@ namespace OpenS4L.Server.Game
                     .ToArray()
             ));
 
-            Session.Send(new PlayerAccountInfoAckMessage(new PlayerAccountInfoDto
+            Session.Send(new PlayerAccountInfoAckMessage(CreateAccountInfoDto()));
+
+            SendClubInfo();
+        }
+
+        private PlayerAccountInfoDto CreateAccountInfoDto()
+        {
+            return new PlayerAccountInfoDto
             {
                 Level = (byte)Level,
                 TotalExperience = TotalExperience,
@@ -409,9 +426,7 @@ namespace OpenS4L.Server.Game
                 TutorialState = (uint)(_gameOptions.EnableTutorial ? TutorialState : 2),
                 Nickname = Account.Nickname,
                 IsGM = _gameOptions.ShowGMFlag && Account.SecurityLevel > SecurityLevel.User
-            }));
-
-            SendClubInfo();
+            };
         }
 
         public void SendClubInfo()

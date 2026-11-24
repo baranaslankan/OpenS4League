@@ -45,6 +45,8 @@
     StartAP: 0
     StartCoins1: 0
     StartCoins2: 0
+    # false: refresh the lobby EXP bar with ExpRefreshInfoAck, true: re-send PlayerAccountInfoAck
+    ExpRefreshUsesAccountInfo: false
     NickRestrictions:
     {
       MinLength: 4

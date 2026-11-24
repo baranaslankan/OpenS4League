@@ -70,8 +70,9 @@ namespace OpenS4L.Server.Game.Commands
                 return false;
 
             target.GainExperience(amount);
+            target.SendExperienceUpdate();
             this.Reply(plr,
-                $"{target.Account.Nickname}: level={target.Level} exp={target.TotalExperience} (relog to refresh the bar)");
+                $"{target.Account.Nickname}: level={target.Level} exp={target.TotalExperience}");
             return true;
         }
 
@@ -95,8 +96,9 @@ namespace OpenS4L.Server.Game.Commands
             }
 
             target.TotalExperience = levelInfo.TotalExperience;
+            target.SendExperienceUpdate();
             this.Reply(plr,
-                $"{target.Account.Nickname}: level={target.Level} exp={target.TotalExperience} (relog to refresh the bar)");
+                $"{target.Account.Nickname}: level={target.Level} exp={target.TotalExperience}");
             return true;
         }
 

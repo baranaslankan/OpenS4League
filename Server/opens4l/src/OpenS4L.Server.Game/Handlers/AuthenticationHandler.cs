@@ -26,7 +26,8 @@ namespace OpenS4L.Server.Game.Handlers
 {
     internal class AuthenticationHandler
         : IHandle<LoginRequestReqMessage>,
-          IHandle<CharacterFirstCreateReqMessage>
+          IHandle<CharacterFirstCreateReqMessage>,
+          IHandle<NickCheckReqMessage>
     {
         private readonly ILogger _logger;
         private readonly NetworkOptions _networkOptions;
@@ -188,6 +189,20 @@ namespace OpenS4L.Server.Game.Handlers
             if (!string.IsNullOrWhiteSpace(account.Nickname))
                 await session.Player.SendAccountInformation();
 
+            return true;
+        }
+
+        // Sent by the nickname dialog of the first character creation (before the player has a nickname,
+        // so MustBeLoggedIn can't be used)
+        [Inline]
+        public async Task<bool> OnHandle(MessageContext context, NickCheckReqMessage message)
+        {
+            var session = context.GetSession<Session>();
+            if (session.Player == null)
+                return true;
+
+            var available = await IsNickAvailableAsync(message.Nickname);
+            session.Send(new NickCheckAckMessage(!available));
             return true;
         }
 

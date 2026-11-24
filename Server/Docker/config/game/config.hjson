@@ -38,6 +38,8 @@
     EnableTutorial: true
     # false: staff accounts are not flagged as GM to the client, so capsule animations play
     ShowGMFlag: false
+    # true: refresh the EXP bar by re-sending the login account info (fallback if the bar does not move)
+    ExpRefreshUsesAccountInfo: false
     EnableLicenseRequirement: true
     MaxLevel: 100
     StartLevel: 0

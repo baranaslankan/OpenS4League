@@ -138,6 +138,15 @@ namespace OpenS4L.Server.Game
             }
 
             Room.Broadcast(new GameBriefingInfoAckMessage(true, false, briefing.GetData()));
+
+            // Refresh the EXP bar after the result briefing so the result screen still sees the
+            // old experience (the briefing carries the gained experience and the level up flag)
+            foreach (var plr in TeamManager.PlayersPlaying)
+            {
+                var briefingPlayer = briefing.Players.First(x => x.AccountId == plr.Account.Id);
+                if (briefingPlayer.ExperienceGained > 0)
+                    plr.SendExperienceUpdate();
+            }
         }
 
         protected internal virtual Team GetWinnerTeam()

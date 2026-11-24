@@ -34,6 +34,7 @@ namespace OpenS4L.Server.Game
         private readonly ConcurrentDictionary<ulong, Player> _players;
         private readonly ConcurrentDictionary<ulong, object> _kickedPlayers;
         private readonly CounterRecycler _idRecycler;
+        private readonly object _voteKickSync = new object();
 
         public RoomManager RoomManager { get; internal set; }
         public IReadOnlyDictionary<ulong, Player> Players => _players;
@@ -46,6 +47,7 @@ namespace OpenS4L.Server.Game
         public TeamManager TeamManager { get; }
         public MapInfo Map { get; private set; }
         public GameRuleBase GameRule { get; private set; }
+        public VoteKick CurrentVoteKick { get; private set; }
 
         public event EventHandler<RoomPlayerEventArgs> PlayerJoining;
         public event EventHandler<RoomPlayerEventArgs> PlayerJoined;
@@ -123,7 +125,7 @@ namespace OpenS4L.Server.Game
             RoomManager = roomManager;
             Id = id;
             Options = options;
-            Map = _gameDataService.Maps.First(x => x.Id == options.Map);
+            Map = _gameDataService.GetMap(options.Map, options.GameRule);
             GameRule = _gameRuleResolver.CreateGameRule(Options);
             GameRule.Initialize(this);
             GameRule.StateMachine.GameStateChanged += OnGameStateChanged;
@@ -133,6 +135,9 @@ namespace OpenS4L.Server.Game
                 ("ChannelId", RoomManager.Channel.Id),
                 ("RoomId", Id)
             );
+
+            if (Options.IsRandomMap)
+                _logger.Debug("Random map resolved to {MapId} {Map}", Map.Id, Map.ToString());
         }
 
         public RoomJoinError Join(Player plr)
@@ -233,6 +238,11 @@ namespace OpenS4L.Server.Game
 
             plr.Session.Send(new RoomLeavePlayerInfoAckMessage(plr.Account.Id));
 
+            // Nothing left to vote on when the target is gone
+            var voteKick = CurrentVoteKick;
+            if (voteKick != null && voteKick.Target == plr)
+                EndVoteKick(voteKick, false);
+
             OnPlayerLeft(plr);
 
             if (_players.Count > 0)
@@ -300,7 +310,7 @@ namespace OpenS4L.Server.Game
                 return RoomChangeRulesError.InvalidGameRule;
             }
 
-            var map = _gameDataService.Maps.FirstOrDefault(x => x.Id == options.Map);
+            var map = _gameDataService.GetMap(options.Map, options.GameRule);
             if (map == null)
                 return RoomChangeRulesError.InvalidMap;
 
@@ -310,11 +320,24 @@ namespace OpenS4L.Server.Game
             if (options.PlayerLimit + options.SpectatorLimit < Players.Count)
                 return RoomChangeRulesError.PlayerLimitTooLow;
 
+            // Same as room creation: a random map placeholder becomes a random real map and the
+            // real map id is what gets broadcast (RoomChangeRuleNotifyAck2/RoomChangeRuleAck)
+            var isRandomMap = map.IsRandom;
+            if (isRandomMap)
+            {
+                map = _gameDataService.GetRandomMap(options.GameRule, options.PlayerLimit);
+                if (map == null)
+                    return RoomChangeRulesError.InvalidMap;
+
+                _logger.Debug("Random map resolved to {MapId} {Map}", map.Id, map.ToString());
+            }
+
             IsChangingRules = true;
 
             Options.Name = options.Name;
             Options.GameRule = options.GameRule;
-            Options.Map = options.Map;
+            Options.Map = map.WireId;
+            Options.IsRandomMap = isRandomMap;
             Options.PlayerLimit = options.PlayerLimit;
             Options.SpectatorLimit = options.SpectatorLimit;
             Options.TimeLimit = options.TimeLimit;
@@ -326,7 +349,7 @@ namespace OpenS4L.Server.Game
             Broadcast(new RoomChangeRuleNotifyAck2Message(_mapper.ToChangeRule2Dto(Options)));
 
             GameRule.Cleanup();
-            Map = _gameDataService.Maps.First(x => x.Id == Options.Map);
+            Map = map;
             GameRule = _gameRuleResolver.CreateGameRule(Options);
             GameRule.Initialize(this);
             GameRule.StateMachine.GameStateChanged += OnGameStateChanged;
@@ -363,6 +386,88 @@ namespace OpenS4L.Server.Game
             IsChangingRules = false;
             OnOptionsChanged();
             return RoomChangeRulesError.OK;
+        }
+
+        public VoteKickError StartVoteKick(Player sender, Player target, VoteKickReason reason)
+        {
+            if (sender.Room != this || target == null || target.Room != this || target == sender || target.IsInGMMode)
+                return VoteKickError.InvalidTarget;
+
+            var voters = VoteKick.GetVoters(this, target);
+            var neededCount = VoteKick.GetNeededCount(voters.Length);
+            if (voters.Length < neededCount)
+                return VoteKickError.NotEnoughPlayers;
+
+            var voteKick = new VoteKick(sender, target, reason, neededCount);
+            lock (_voteKickSync)
+            {
+                if (CurrentVoteKick != null)
+                    return VoteKickError.AlreadyVoting;
+
+                CurrentVoteKick = voteKick;
+            }
+
+            _logger.Information("Vote kick started by {Sender} against {Target} reason={Reason}",
+                sender.Account.Nickname, target.Account.Nickname, reason);
+
+            _schedulerService.ScheduleAsync((ctx, state) =>
+            {
+                var room = (Room)ctx;
+                room.EndVoteKick((VoteKick)state, false);
+            }, this, voteKick, VoteKick.Duration);
+
+            // The sender votes yes
+            CastVoteKick(sender, true);
+            return VoteKickError.OK;
+        }
+
+        public void CastVoteKick(Player plr, bool isYes)
+        {
+            var voteKick = CurrentVoteKick;
+            if (voteKick == null || plr.Room != this || plr == voteKick.Target || plr.IsInGMMode)
+                return;
+
+            if (!voteKick.Vote(plr, isYes))
+                return;
+
+            BroadcastVoteKickState(voteKick);
+
+            var voterCount = VoteKick.GetVoters(this, voteKick.Target).Length;
+            if (voteKick.YesCount >= voteKick.NeededCount)
+                EndVoteKick(voteKick, true);
+            else if (voterCount - voteKick.NoCount < voteKick.NeededCount ||
+                     voteKick.YesCount + voteKick.NoCount >= voterCount)
+                EndVoteKick(voteKick, false); // Can't pass anymore
+        }
+
+        private void EndVoteKick(VoteKick voteKick, bool kick)
+        {
+            lock (_voteKickSync)
+            {
+                if (CurrentVoteKick != voteKick)
+                    return;
+
+                CurrentVoteKick = null;
+            }
+
+            _logger.Information("Vote kick against {Target} ended yes={Yes} no={No} kicked={Kicked}",
+                voteKick.Target.Account.Nickname, voteKick.YesCount, voteKick.NoCount, kick);
+
+            if (kick && voteKick.Target.Room == this)
+                Leave(voteKick.Target, RoomLeaveReason.VoteKick);
+        }
+
+        private void BroadcastVoteKickState(VoteKick voteKick)
+        {
+            Broadcast(new GameKickOutStateAckMessage
+            {
+                NoCount = voteKick.NoCount,
+                YesCount = voteKick.YesCount,
+                NeededCount = voteKick.NeededCount,
+                Reason = voteKick.Reason,
+                Sender = voteKick.Sender.Account.Id,
+                Target = voteKick.Target.Account.Id
+            });
         }
 
         public uint GetAveragePing()

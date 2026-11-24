@@ -16,6 +16,14 @@
         public int StartAP { get; set; }
         public int StartCoins1 { get; set; }
         public int StartCoins2 { get; set; }
+
+        /// <summary>
+        /// How the lobby EXP bar is refreshed after experience changes (match result, admin commands).
+        /// false (default): send ExpRefreshInfoAck with the new total experience.
+        /// true: re-send PlayerAccountInfoAck (the login message that fills the bar) instead,
+        /// in case ExpRefreshInfoAck turns out to mean something else.
+        /// </summary>
+        public bool ExpRefreshUsesAccountInfo { get; set; }
         public NickRestrictionOptions NickRestrictions { get; set; }
         public ClanOptions ClanOptions { get; set; }
         public int DurabilityLossPerDeath { get; set; }

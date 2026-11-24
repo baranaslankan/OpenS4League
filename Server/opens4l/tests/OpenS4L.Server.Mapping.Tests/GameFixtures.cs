@@ -232,6 +232,12 @@ namespace OpenS4L.Server.Mapping.Tests
 
         public static OpenS4L.Server.Game.Mappers.GameMapper CreateMapper() => new();
 
+        /// <summary>Replaces the map table (the default fixture only has map 3 = Practice).</summary>
+        public static void SetMaps(GameDataService gds, params MapInfo[] maps)
+        {
+            Set(gds, "Maps", ImmutableArray.Create(maps));
+        }
+
         private static void Set(object obj, string prop, object value)
         {
             var p = obj.GetType().GetProperty(prop, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
