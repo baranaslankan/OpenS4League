@@ -107,6 +107,9 @@ namespace OpenS4L.Server.Mapping.Tests
 
             var group = Assert.Single(capsule.Groups);
             Assert.Equal(new uint[] { 4050124, 1021018, 1031018, 4050123 }, group.Rewards.Select(x => x.ItemNumber.Id));
+            // The permanent set (slot 1) is the rare 5% pick; the rest share 95%.
+            Assert.Equal(500u, group.Rewards[0].Rate);
+            Assert.All(group.Rewards.Skip(1), r => Assert.Equal(9500u / 3, r.Rate));
         }
 
         [Fact]

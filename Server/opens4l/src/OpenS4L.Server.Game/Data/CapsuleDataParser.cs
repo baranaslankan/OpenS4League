@@ -94,6 +94,7 @@ namespace OpenS4L.Server.Game.Data
                 // everything listed, and PEN, when listed, is rolled separately.
                 var items = new CapsuleRewardGroup();
                 var pens = new CapsuleRewardGroup();
+                var topPrizes = new List<CapsuleRewardInfo>();
                 for (var i = 1; i <= 10; ++i)
                 {
                     if (!uint.TryParse((string)icons.Attribute("ID_" + i), out var rewardItem) || rewardItem == 0)
@@ -121,7 +122,14 @@ namespace OpenS4L.Server.Game.Data
                     }
 
                     (reward.Type == CapsuleRewardType.PEN ? pens : items).Rewards.Add(reward);
+                    if (reward.Type == CapsuleRewardType.Item && ((string)slots?.Attribute("slot_" + i))?.Trim() == "1")
+                        topPrizes.Add(reward);
                 }
+
+                // The top prize (alone in slot 1, e.g. the permanent set) is rare: in the reward
+                // tables a set inside a capsule is almost always a 5% pick against the rest.
+                if (!isSetBox)
+                    WeightTopPrize(items, topPrizes);
 
                 var groups = isSetBox
                     ? items.Rewards.Concat(pens.Rewards)
@@ -133,6 +141,27 @@ namespace OpenS4L.Server.Game.Data
                         ItemNumber = new ItemNumber(number), Source = CapsuleSource.Tooltip, Groups = groups
                     };
             }
+        }
+
+        /// <summary>Chance of the slot-1 prize when the tooltip gives no odds (reward-table norm).</summary>
+        public const uint TopPrizePercent = 5;
+
+        /// <summary>
+        /// Gives the slot-1 items <see cref="TopPrizePercent"/>% together and the rest of the group
+        /// the remainder, split evenly. Leaves equal odds when slot 1 is empty or holds everything.
+        /// </summary>
+        public static void WeightTopPrize(CapsuleRewardGroup group, IList<CapsuleRewardInfo> topPrizes)
+        {
+            var others = group.Rewards.Where(r => !topPrizes.Contains(r)).ToList();
+            if (topPrizes.Count == 0 || others.Count == 0)
+                return;
+
+            const uint total = 10000;
+            var top = total * TopPrizePercent / 100;
+            foreach (var r in topPrizes)
+                r.Rate = Math.Max(1, top / (uint)topPrizes.Count);
+            foreach (var r in others)
+                r.Rate = Math.Max(1, (total - top) / (uint)others.Count);
         }
 
         /// <summary>Reads "PEN{N}1,000~100,000" style text. A single number gives min == max.</summary>
