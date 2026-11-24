@@ -24,6 +24,8 @@ namespace OpenS4L.Server.Game.Services
         public ImmutableArray<DefaultItem> DefaultItems { get; private set; }
         public ImmutableDictionary<string, GameTempo> GameTempos { get; private set; }
         public ImmutableDictionary<int, EquipLimitInfo> EquipLimits { get; private set; }
+        public ImmutableDictionary<ItemNumber, CapsuleInfo> Capsules { get; private set; } =
+            ImmutableDictionary<ItemNumber, CapsuleInfo>.Empty;
 
         // Shop data
         public ImmutableDictionary<ItemNumber, ShopItem> ShopItems { get; private set; }
@@ -76,6 +78,7 @@ namespace OpenS4L.Server.Game.Services
             LoadDefaultItems();
             LoadGameTempos();
             LoadEquipLimits();
+            LoadCapsules();
             await LoadShop();
             await LoadLevelRewards();
         }

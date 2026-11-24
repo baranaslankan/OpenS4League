@@ -3,7 +3,9 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Globalization;
 using System.Linq;
+using System.IO;
 using System.Threading.Tasks;
+using System.Xml.Linq;
 using Microsoft.EntityFrameworkCore;
 using OpenS4L.Database;
 using OpenS4L.Database.Game;
@@ -402,6 +404,59 @@ namespace OpenS4L.Server.Game.Services
                     };
                 }
             }
+        }
+
+        /// <summary>
+        /// Capsule rewards: the optional server-side table <c>server/ItemBag.xml</c> (with odds) wins;
+        /// every other capsule in the client's tooltip file gives one of its listed rewards per slot,
+        /// all equally likely.
+        /// </summary>
+        public void LoadCapsules()
+        {
+            _logger.Information("Loading capsules...");
+            var capsules = new Dictionary<ItemNumber, CapsuleInfo>();
+
+            var tooltipPath = Path.Combine(_resourcePath, "xml", "_eu_item_tooltip_addcapsule.x7");
+            var stringsPath = Path.Combine(_resourcePath, "language", "xml", "tooltipinfo_string_table.x7");
+            if (File.Exists(tooltipPath))
+            {
+                var strings = new Dictionary<string, string>();
+                if (File.Exists(stringsPath))
+                {
+                    foreach (var e in XDocument.Load(stringsPath).Root?.Elements("string") ?? Enumerable.Empty<XElement>())
+                    {
+                        var key = (string)e.Attribute("key");
+                        if (key != null)
+                            strings[key] = (string)e.Attribute("eng") ?? "";
+                    }
+                }
+
+                foreach (var capsule in CapsuleDataParser.ParseTooltip(XDocument.Load(tooltipPath), strings))
+                    capsules[capsule.ItemNumber] = capsule;
+            }
+            else
+            {
+                _logger.Warning("Capsule tooltip file not found at {Path}", tooltipPath);
+            }
+
+            var tablePath = Path.Combine(_resourcePath, "server", "ItemBag.xml");
+            var fromTable = 0;
+            if (File.Exists(tablePath))
+            {
+                foreach (var capsule in CapsuleDataParser.ParseRewardTable(XDocument.Load(tablePath)))
+                {
+                    capsules[capsule.ItemNumber] = capsule;
+                    ++fromTable;
+                }
+            }
+            else
+            {
+                _logger.Information("No capsule reward table at {Path}; all capsules use equal odds", tablePath);
+            }
+
+            Capsules = capsules.ToImmutableDictionary();
+            _logger.Information("Loaded {Count} capsules ({FromTable} with odds from the reward table)",
+                Capsules.Count, fromTable);
         }
 
         public async Task LoadLevelRewards()

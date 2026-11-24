@@ -1,20 +1,54 @@
+using System;
+using System.Linq;
 using System.Threading.Tasks;
 using Logging;
 using OpenS4L.Network;
 using OpenS4L.Network.Message.Game;
+using OpenS4L.Server.Game.Services;
 using ProudNet;
 
 namespace OpenS4L.Server.Game.Handlers
 {
     internal class InventoryHandler
         : IHandle<ItemUseItemReqMessage>, IHandle<ItemRepairItemReqMessage>, IHandle<ItemRefundItemReqMessage>,
-          IHandle<ItemDiscardItemReqMessage>
+          IHandle<ItemDiscardItemReqMessage>, IHandle<ItemUseCapsuleReqMessage>
     {
         private readonly ILogger _logger;
+        private readonly GameDataService _gameDataService;
 
-        public InventoryHandler(ILogger<InventoryHandler> logger)
+        public InventoryHandler(ILogger<InventoryHandler> logger, GameDataService gameDataService)
         {
             _logger = logger;
+            _gameDataService = gameDataService;
+        }
+
+        [Inline]
+        public async Task<bool> OnHandle(MessageContext context, ItemUseCapsuleReqMessage message)
+        {
+            var session = context.GetSession<Session>();
+            var plr = session.Player;
+            var capsule = plr?.Inventory[message.ItemId];
+            if (capsule == null)
+            {
+                session.Send(new ItemUseCapsuleAckMessage(CapsuleOpener.ResultFailed));
+                return true;
+            }
+
+            var rewards = CapsuleOpener.Open(plr, capsule, _gameDataService, Random.Shared);
+            if (rewards == null)
+            {
+                _logger.Warning("Unable to open capsule {ItemNumber} (no known rewards in the shop)",
+                    capsule.ItemNumber);
+                session.Send(new ItemUseCapsuleAckMessage(CapsuleOpener.ResultFailed));
+                return true;
+            }
+
+            _logger.Information("Opened capsule {ItemNumber}: {Rewards}", capsule.ItemNumber,
+                string.Join(", ", rewards.Select(r => r.RewardType == CapsuleRewardType.PEN
+                    ? r.PEN + " PEN"
+                    : r.ItemNumber.ToString())));
+            session.Send(new ItemUseCapsuleAckMessage(rewards, CapsuleOpener.ResultSuccess));
+            return true;
         }
 
         [Inline]

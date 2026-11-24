@@ -172,6 +172,34 @@ namespace OpenS4L.Server.Game
         }
 
         /// <summary>
+        /// Gives a shop item without charging for it (admin commands, capsule rewards).
+        /// Uses the shop price matching <paramref name="periodType"/>/<paramref name="period"/> when one
+        /// exists, otherwise a permanent price, otherwise any enabled price. Effects match a purchase.
+        /// Returns null when the item is not in the shop or has no enabled price.
+        /// </summary>
+        public PlayerItem CreateFromShop(ItemNumber itemNumber, ItemPeriodType periodType = ItemPeriodType.None,
+            ushort period = 0, byte color = 0)
+        {
+            var shopItem = _gameDataService.GetShopItem(itemNumber);
+            if (shopItem == null)
+                return null;
+
+            var choice = shopItem.ItemInfos
+                .Where(info => info.IsEnabled && info.PriceGroup != null)
+                .SelectMany(info => info.PriceGroup.Prices.Where(p => p.IsEnabled).Select(price => (info, price)))
+                .OrderBy(x => x.price.PeriodType == periodType && x.price.Period == period ? 0
+                    : x.price.PeriodType == ItemPeriodType.None ? 1 : 2)
+                .FirstOrDefault();
+
+            if (choice.info == null)
+                return null;
+
+            var effects = choice.info.EffectGroup?.Effects.Select(x => x.Effect).Where(x => x != 0).ToArray()
+                          ?? Array.Empty<uint>();
+            return Create(choice.info, choice.price, color, effects);
+        }
+
+        /// <summary>
         /// Removes the item from the inventory
         /// </summary>
         public bool Remove(PlayerItem item)

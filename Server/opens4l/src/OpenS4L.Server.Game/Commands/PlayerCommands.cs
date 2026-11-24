@@ -114,30 +114,13 @@ namespace OpenS4L.Server.Game.Commands
             if (target == null)
                 return false;
 
-            var shopItem = _gameDataService.GetShopItem(new ItemNumber(number));
-            if (shopItem == null)
+            var item = target.Inventory.CreateFromShop(new ItemNumber(number));
+            if (item == null)
             {
-                this.ReplyError(plr, $"Item {number} is not in the shop");
+                this.ReplyError(plr, $"Item {number} is not in the shop or has no enabled price");
                 return true;
             }
 
-            // Prefer an enabled permanent price, then any enabled price.
-            var choice = shopItem.ItemInfos
-                .Where(info => info.IsEnabled && info.PriceGroup != null)
-                .SelectMany(info => info.PriceGroup.Prices.Where(p => p.IsEnabled).Select(price => (info, price)))
-                .OrderBy(x => x.price.PeriodType == ItemPeriodType.None ? 0 : 1)
-                .FirstOrDefault();
-
-            if (choice.info == null)
-            {
-                this.ReplyError(plr, $"Item {number} has no enabled price");
-                return true;
-            }
-
-            // Same effect handling as a shop purchase (ShopHandler).
-            var effects = choice.info.EffectGroup?.Effects.Select(x => x.Effect).Where(x => x != 0).ToArray()
-                          ?? System.Array.Empty<uint>();
-            var item = target.Inventory.Create(choice.info, choice.price, 0, effects);
             this.Reply(plr, $"{target.Account.Nickname}: got item {number} (id {item.Id})");
             return true;
         }
