@@ -17,7 +17,9 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-1234}
       POSTGRES_DB: auth
     ports:
-      - "127.0.0.1:5432:5432"
+      # Host port overridable (e.g. POSTGRES_HOST_PORT=5433 in .env) when 5432 is already taken
+      # on the developer machine. The servers use the internal `postgres:5432` either way.
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"
     volumes:
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
       - opens4l-db:/var/lib/postgresql/data
@@ -77,6 +79,11 @@ services:
 
   game:
     image: mcr.microsoft.com/dotnet/aspnet:10.0
+    # SharpLzo 0.1.2 (used by ResourceHandler to LZO-compress shop data for the client) ships only
+    # a linux-x64 MiniLzo.so + Windows DLLs; on linux/arm64 its type initializer throws. Pinning
+    # the game container to amd64 makes it run under emulation on Apple Silicon (no-op on x64
+    # hosts). See docs/M0-APPLE-SILICON.md.
+    platform: linux/amd64
     container_name: opens4l-game
     working_dir: /app
     command: ["dotnet", "OpenS4L.Server.Game.dll"]
@@ -120,6 +127,10 @@ services:
   provision:
     build: ./provision
     container_name: opens4l-provision
+    # Only started explicitly (`docker compose run --rm provision`, i.e. make bootstrap/provision).
+    # Without a profile, `docker compose up -d` also started it, racing the explicit run and
+    # failing one of them on the unique admin username.
+    profiles: ["provision"]
     restart: "no"
     environment:
       DB_HOST: postgres

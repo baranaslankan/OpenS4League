@@ -1,0 +1,87 @@
+# Server build + tests on Ubuntu x64 and macOS ARM64 (Apple Silicon).
+#
+# - ubuntu-latest (x64): full suite, including the *PostgresTests classes (Testcontainers needs
+#   Docker, which ubuntu runners provide).
+# - macos-latest (arm64): GitHub's Apple Silicon runners have no Docker, so the 7 tests in the
+#   *PostgresTests classes are excluded there by an explicit filter. They run on ubuntu, and
+#   on a developer Mac with Docker Desktop (`make test`).
+#
+# Restore needs the wtfblub MyGet feed from Server/opens4l/NuGet.Config (SharpLzo is only
+# published there).
+name: Server CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "Server/**"
+      - "Makefile"
+      - ".github/workflows/server-ci.yml"
+  pull_request:
+    paths:
+      - "Server/**"
+      - "Makefile"
+      - ".github/workflows/server-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: server-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ubuntu-x64
+            os: ubuntu-latest
+            arch: X64
+            test_filter: ""
+          - name: macos-arm64
+            os: macos-latest
+            arch: ARM64
+            test_filter: "FullyQualifiedName!~PostgresTests"
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+      DOTNET_NOLOGO: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check runner architecture
+        shell: bash
+        run: |
+          echo "runner.arch=${{ runner.arch }} uname=$(uname -m)"
+          test "${{ runner.arch }}" = "${{ matrix.arch }}"
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Build server solution (Release)
+        run: make -C Server build
+
+      - name: Test
+        shell: bash
+        run: |
+          FILTER_ARGS=()
+          if [ -n "${{ matrix.test_filter }}" ]; then
+            echo "Excluding Docker-dependent tests: ${{ matrix.test_filter }}"
+            FILTER_ARGS=(--filter "${{ matrix.test_filter }}")
+          fi
+          dotnet test Server/opens4l/tests/OpenS4L.Server.Mapping.Tests/OpenS4L.Server.Mapping.Tests.csproj \
+            -c Release --no-build "${FILTER_ARGS[@]}" \
+            --logger "trx;LogFileName=results.trx" --results-directory test-results
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.name }}
+          path: test-results/
