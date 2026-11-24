@@ -663,6 +663,77 @@ namespace OpenS4L.Server.Mapping.Tests
             Assert.Equal(new uint[] { 12002 }, plr.Inventory.Single(x => x.ItemNumber == gun).Effects.ToArray());
         }
 
+        private static readonly ItemNumber FullBooster = new ItemNumber(5040006u);
+
+        private PlayerItem GiveBooster(Player plr, int id)
+        {
+            GameFixtures.SeedShopItem(_ctx.GameData, FullBooster, GameFixtures.SeedUnitPriceGroup(_ctx.GameData, id));
+            return plr.Inventory.CreateFromShop(FullBooster, ItemPeriodType.Units, 1);
+        }
+
+        // A gun that comes as 1 day (weight 3) or permanent (weight 1).
+        private ItemNumber SeedTimedOrPermanentGun(int priceGroupId)
+        {
+            var gun = new ItemNumber(2000096u);
+            GameFixtures.SeedShopItem(_ctx.GameData, gun, GameFixtures.SeedPeriodPriceGroup(_ctx.GameData, priceGroupId,
+                (ItemPeriodType.None, 0), (ItemPeriodType.Days, 1)));
+            var info = _ctx.GameData.Capsules[Capsule];
+            info.Groups[0].Rewards[0] = new CapsuleRewardInfo
+            {
+                Type = CapsuleRewardType.Item, ItemNumber = gun, PeriodType = ItemPeriodType.None,
+                Options =
+                {
+                    new CapsuleRewardOption { PeriodType = ItemPeriodType.Days, Period = 1, Weight = 3 },
+                    new CapsuleRewardOption { PeriodType = ItemPeriodType.None, Weight = 1 }
+                }
+            };
+            return gun;
+        }
+
+        [Fact]
+        public async Task Open_withFullUniqueBoosterOn_givesPermanentAndUsesTheBooster()
+        {
+            var (plr, _) = await LoginWithCapsuleAsync(9317, withPen: false);
+            var gun = SeedTimedOrPermanentGun(37);
+            var booster = GiveBooster(plr, 38);
+            plr.EquippedBoosts.Add(booster.Id);
+            var capsule = plr.Inventory.First(x => x.ItemNumber == Capsule);
+
+            var reward = Assert.Single(CapsuleOpener.Open(plr, capsule, _ctx.GameData, new Random(1)));
+
+            Assert.Equal(ItemPeriodType.None, reward.PeriodType);
+            Assert.DoesNotContain(plr.Inventory, x => x.ItemNumber == FullBooster);
+            Assert.Empty(plr.EquippedBoosts);
+        }
+
+        [Fact]
+        public async Task Open_withBoosterNotSwitchedOn_rollsNormallyAndKeepsIt()
+        {
+            var (plr, _) = await LoginWithCapsuleAsync(9318, withPen: false);
+            SeedTimedOrPermanentGun(39);
+            GiveBooster(plr, 40);
+            var capsule = plr.Inventory.First(x => x.ItemNumber == Capsule);
+
+            CapsuleOpener.Open(plr, capsule, _ctx.GameData, new Random(1));
+
+            Assert.Contains(plr.Inventory, x => x.ItemNumber == FullBooster);
+        }
+
+        [Fact]
+        public async Task EquipBoost_switchesItOn_andAnswersWithTheBoostList()
+        {
+            var (plr, channel) = await LoginWithCapsuleAsync(9319, withPen: false);
+            var booster = GiveBooster(plr, 41);
+
+            await _ctx.Get<InventoryHandler>().OnHandle(new MessageContext { Session = plr.Session },
+                new ItemUseItemReqMessage { Action = UseItemAction.Equip, CharacterSlot = 0, EquipSlot = 0, ItemId = booster.Id });
+
+            Assert.Contains(booster.Id, plr.EquippedBoosts);
+            var ack = channel.Outbound.Select(o => o.GetType().GetProperty("Message")?.GetValue(o))
+                .OfType<ItemEquipBoostItemInfoAckMessage>().Last();
+            Assert.Equal(new[] { booster.Id }, ack.Items);
+        }
+
         private async Task<(Player, FakeSocketChannel)> LoginWithCapsuleAsync(uint accountId, bool rewardInShop = true,
             bool withPen = true)
         {

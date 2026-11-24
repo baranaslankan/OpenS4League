@@ -105,6 +105,12 @@ namespace OpenS4L.Server.Game
         public DateTimeOffset StartPlayTime { get; internal set; }
         public DateTimeOffset[] CharacterStartPlayTime { get; internal set; }
         public bool IsInGMMode { get; set; }
+
+        /// <summary>
+        /// Boost items the player switched on (the client "equips" boosts into its boost slot).
+        /// Kept for the session only: after a relog the player switches them on again.
+        /// </summary>
+        public HashSet<ulong> EquippedBoosts { get; } = new HashSet<ulong>();
         public bool IsLoading { get; internal set; }
 
         public event EventHandler<PlayerEventArgs> Disconnected;

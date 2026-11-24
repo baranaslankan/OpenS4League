@@ -73,7 +73,9 @@ namespace OpenS4L.Server.Game.Handlers
                 return true;
             }
 
-            if (character == null || item == null || plr.Room != null && plr.State != PlayerState.Lobby)
+            // Boosts go into the boost slot, not onto a character, so they need no character.
+            if (character == null && item?.ItemNumber.Category != ItemCategory.Boost || item == null ||
+                plr.Room != null && plr.State != PlayerState.Lobby)
             {
                 _logger.Warning("Item use refused Action={Action} Item={ItemNumber} CharacterSlot={CharacterSlot} EquipSlot={EquipSlot} InRoom={InRoom}",
                     message.Action, item?.ItemNumber, message.CharacterSlot, message.EquipSlot, plr.Room != null);
@@ -86,6 +88,28 @@ namespace OpenS4L.Server.Game.Handlers
             // so always send a result here too - otherwise the client hangs indefinitely on a
             // request the server dropped (see Character.Equip for the equip-slot-swap case this
             // used to hit on almost every weapon change).
+            // Boosts (PEN/EXP Plus, Unique Boosters) go into the client's boost slot, not onto the
+            // character: the client sends an equip and waits for the list of active boosts.
+            if (item.ItemNumber.Category == ItemCategory.Boost &&
+                (message.Action == UseItemAction.Equip || message.Action == UseItemAction.UnEquip))
+            {
+                if (message.Action == UseItemAction.Equip && !item.IsExpiredOrUsedUp())
+                {
+                    // One Unique Booster at a time: a new one replaces the old.
+                    if (CapsuleOpener.IsUniqueBooster(item.ItemNumber))
+                        plr.EquippedBoosts.RemoveWhere(id => plr.Inventory[id] is { } b && CapsuleOpener.IsUniqueBooster(b.ItemNumber));
+                    plr.EquippedBoosts.Add(item.Id);
+                }
+                else
+                {
+                    plr.EquippedBoosts.Remove(item.Id);
+                }
+
+                _logger.Information("Boost {Action} Item={ItemNumber}", message.Action, item.ItemNumber);
+                CapsuleOpener.SendBoosts(plr);
+                return true;
+            }
+
             switch (message.Action)
             {
                 case UseItemAction.Equip:
