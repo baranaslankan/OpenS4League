@@ -7,7 +7,7 @@ using ProudNet;
 
 namespace OpenS4L.Server.Chat.Handlers
 {
-    internal class UserDataHandler : IHandle<UserDataOneReqMessage>
+    internal class UserDataHandler : IHandle<UserDataOneReqMessage>, IHandle<RoomInvitationPlayerReqMessage>
     {
         private readonly PlayerManager _playerManager;
         private readonly ChatMapper _mapper;
@@ -36,6 +36,32 @@ namespace OpenS4L.Server.Chat.Handlers
                 return true;
 
             session.Send(new UserDataFourAckMessage(25, _mapper.ToUserDataDto(target)));
+            return true;
+        }
+
+        [Firewall(typeof(MustBeLoggedIn))]
+        [Inline]
+        public async Task<bool> OnHandle(MessageContext context, RoomInvitationPlayerReqMessage message)
+        {
+            var session = context.GetSession<Session>();
+            var plr = session.Player;
+
+            // Can only invite to the room we are in and only players in the same channel
+            if (plr.Channel == null || plr.RoomId == 0 || plr.Account.Id == message.AccountId)
+                return true;
+
+            var target = _playerManager[message.AccountId];
+            if (target == null || target.Channel != plr.Channel || target.RoomId != 0 ||
+                target.Ignore.Contains(plr.Account.Id))
+            {
+                return true;
+            }
+
+            // Field meaning is a guess (taken from the message's constructor): inviter id, inviter
+            // nickname and the inviter's location (channel + room) so the client can join the room
+            target.Session.Send(new RoomInvitationPlayerAckMessage(
+                plr.Account.Id, plr.Account.Nickname, _mapper.ToPlayerLocationDto(plr)
+            ));
             return true;
         }
     }

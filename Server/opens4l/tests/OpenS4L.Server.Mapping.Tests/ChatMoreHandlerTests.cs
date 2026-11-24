@@ -160,6 +160,48 @@ namespace OpenS4L.Server.Mapping.Tests
         }
 
         [Fact]
+        public async Task RoomInvitation_sendsInviterLocationToTarget()
+        {
+            var (inviter, _) = await LoginAsync(7101, "inviter");
+            var (target, targetCh) = await LoginAsync(7102, "target");
+            var ch = _ctx.Get<ChannelManager>().GetOrCreateChannel(1);
+            ch.Join(inviter.Player);
+            ch.Join(target.Player);
+            inviter.Player.RoomId = 5;
+
+            await _ctx.Get<UserDataHandler>().OnHandle(Ctx(inviter), new RoomInvitationPlayerReqMessage { AccountId = 7102 });
+
+            var ack = FirstSent<RoomInvitationPlayerAckMessage>(targetCh);
+            Assert.NotNull(ack);
+            Assert.Equal(7101ul, ack.Unk1);
+            Assert.Equal("nick7101", ack.Unk2);
+            Assert.Equal(5, ack.Location.RoomId);
+            Assert.Equal(1, ack.Location.ChannelId);
+        }
+
+        [Fact]
+        public async Task RoomInvitation_notInRoomOrTargetBusy_sendsNothing()
+        {
+            var (inviter, _) = await LoginAsync(7111, "inviter");
+            var (target, targetCh) = await LoginAsync(7112, "target");
+            var ch = _ctx.Get<ChannelManager>().GetOrCreateChannel(1);
+            ch.Join(inviter.Player);
+            ch.Join(target.Player);
+            var handler = _ctx.Get<UserDataHandler>();
+
+            // Inviter is not in a room
+            await handler.OnHandle(Ctx(inviter), new RoomInvitationPlayerReqMessage { AccountId = 7112 });
+            // Target is already in a room
+            inviter.Player.RoomId = 5;
+            target.Player.RoomId = 6;
+            await handler.OnHandle(Ctx(inviter), new RoomInvitationPlayerReqMessage { AccountId = 7112 });
+            // Unknown target
+            await handler.OnHandle(Ctx(inviter), new RoomInvitationPlayerReqMessage { AccountId = 9999 });
+
+            Assert.Null(FirstSent<RoomInvitationPlayerAckMessage>(targetCh));
+        }
+
+        [Fact]
         public async Task UserData_ownAccount_sendsOwnData()
         {
             var (plr, channel) = await LoginAsync(7001, "self");
