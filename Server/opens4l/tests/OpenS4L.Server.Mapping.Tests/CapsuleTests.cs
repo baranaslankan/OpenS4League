@@ -106,10 +106,11 @@ namespace OpenS4L.Server.Mapping.Tests
             var capsule = Assert.Single(CapsuleDataParser.ParseTooltip(doc, new Dictionary<string, string>()));
 
             var group = Assert.Single(capsule.Groups);
-            Assert.Equal(new uint[] { 4050124, 1021018, 1031018, 4050123 }, group.Rewards.Select(x => x.ItemNumber.Id));
+            // Loose costume parts are dropped: set capsules give sets.
+            Assert.Equal(new uint[] { 4050124, 4050123 }, group.Rewards.Select(x => x.ItemNumber.Id));
             // The permanent set (slot 1) is the rare 5% pick; the rest share 95%.
             Assert.Equal(500u, group.Rewards[0].Rate);
-            Assert.All(group.Rewards.Skip(1), r => Assert.Equal(9500u / 3, r.Rate));
+            Assert.Equal(9500u, group.Rewards[1].Rate);
         }
 
         [Fact]

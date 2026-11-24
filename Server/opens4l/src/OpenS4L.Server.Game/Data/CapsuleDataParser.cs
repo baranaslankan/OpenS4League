@@ -129,7 +129,20 @@ namespace OpenS4L.Server.Game.Data
                 // The top prize (alone in slot 1, e.g. the permanent set) is rare: in the reward
                 // tables a set inside a capsule is almost always a 5% pick against the rest.
                 if (!isSetBox)
+                {
+                    // Costume capsules that list set boxes gave sets, not loose parts: their
+                    // tooltips also show the set's parts (tops, gloves, ...), which are dropped.
+                    if (items.Rewards.Any(r => r.ItemNumber.Id / 10000 == 405))
+                    {
+                        foreach (var part in items.Rewards.Where(r => r.ItemNumber.Id / 1000000 == 1).ToList())
+                        {
+                            items.Rewards.Remove(part);
+                            topPrizes.Remove(part);
+                        }
+                    }
+
                     WeightTopPrize(items, topPrizes);
+                }
 
                 var groups = isSetBox
                     ? items.Rewards.Concat(pens.Rewards)
