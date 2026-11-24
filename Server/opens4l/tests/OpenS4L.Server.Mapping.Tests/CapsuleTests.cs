@@ -169,6 +169,18 @@ namespace OpenS4L.Server.Mapping.Tests
         }
 
         [Fact]
+        public async Task Open_rewardHiddenFromShop_isStillGranted()
+        {
+            var (plr, _) = await LoginWithCapsuleAsync(9308, withPen: false);
+            foreach (var info in _ctx.GameData.GetShopItem(Gun).ItemInfos)
+                info.IsEnabled = false;
+            var capsule = plr.Inventory.First(x => x.ItemNumber == Capsule);
+
+            Assert.NotNull(CapsuleOpener.Open(plr, capsule, _ctx.GameData, new Random(1)));
+            Assert.Contains(plr.Inventory, x => x.ItemNumber == Gun);
+        }
+
+        [Fact]
         public async Task Open_rewardNotInShop_keepsCapsule()
         {
             var (plr, _) = await LoginWithCapsuleAsync(9302, rewardInShop: false, withPen: false);

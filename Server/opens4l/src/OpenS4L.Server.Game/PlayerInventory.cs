@@ -233,10 +233,12 @@ namespace OpenS4L.Server.Game
             if (shopItem == null)
                 return null;
 
+            // Listings hidden from the shop still count: capsules can give items that aren't sold.
             var choice = shopItem.ItemInfos
-                .Where(info => info.IsEnabled && info.PriceGroup != null)
+                .Where(info => info.PriceGroup != null)
                 .SelectMany(info => info.PriceGroup.Prices.Where(p => p.IsEnabled).Select(price => (info, price)))
-                .OrderBy(x => x.price.PeriodType == periodType && x.price.Period == period ? 0
+                .OrderBy(x => x.info.IsEnabled ? 0 : 1)
+                .ThenBy(x => x.price.PeriodType == periodType && x.price.Period == period ? 0
                     : x.price.PeriodType == ItemPeriodType.None ? 1 : 2)
                 .ThenBy(x => x.price.Period) // per-unit items: one unit
                 .FirstOrDefault();
