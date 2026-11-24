@@ -26,6 +26,11 @@ namespace OpenS4L.Server.Game.Services
     /// items[0] is the prize and the optional items[1] the bonus item.</item>
     /// </list>
     /// Only PEN prices are used; there is no AP or cash path.
+    ///
+    /// Odds: the packages are always built from the shop (<see cref="BuildPackages"/>). When the
+    /// 2019 EU file (<see cref="RandomShopOdds.FileName"/>) is in the data folder, prize weight,
+    /// period, effect and colour come from it (<see cref="BuildEntry"/>); otherwise the prize is
+    /// uniform and the period weighted by new_random_shop.x7.
     /// </summary>
     public class RandomShopService
     {
@@ -49,6 +54,7 @@ namespace OpenS4L.Server.Game.Services
         private readonly object _cacheSync = new object();
         private ImmutableDictionary<ItemNumber, ShopItem> _cachedShopItems;
         private RandomShopInfo _cachedInfo;
+        private ImmutableDictionary<uint, ItemEffect> _cachedEffects;
         private IReadOnlyList<RandomShopPackage> _packages;
         private ClientData _clientData;
 
@@ -107,7 +113,7 @@ namespace OpenS4L.Server.Game.Services
         public RollResult Roll(Player plr, int packageId, Random random)
         {
             var package = GetPackage(packageId);
-            if (package == null || package.Items.Count == 0)
+            if (package == null || package.Entries.Count == 0)
                 return new RollResult(ResultNotExistPackage);
 
             var character = plr.CharacterManager.CurrentCharacter;
@@ -119,9 +125,8 @@ namespace OpenS4L.Server.Game.Services
                 return new RollResult(ResultNotEnoughMoney);
 
             var info = Info;
-            var prizeItem = package.Items[random.Next(package.Items.Count)];
-            var prizePeriod = RollPeriod(info, package.Kind, random);
-            var prizeChoice = SelectPrice(prizeItem, prizePeriod?.PeriodType ?? ItemPeriodType.None, prizePeriod?.Period ?? 0);
+            var prize = RollPrize(package, random);
+            var prizeChoice = SelectPrice(prize.Item, prize.PeriodType, prize.Period);
             if (prizeChoice.info == null)
                 return new RollResult(ResultMakeItemFail);
 
@@ -139,31 +144,40 @@ namespace OpenS4L.Server.Game.Services
             plr.PEN -= price;
             SetGauge(plr.Account.Id, gauge);
 
-            var items = new List<RandomShopRollingDto> { Grant(plr, prizeChoice) };
+            var items = new List<RandomShopRollingDto> { Grant(plr, prizeChoice, prize.Color, prize.Effects) };
             if (bonusChoice.info != null)
-                items.Add(Grant(plr, bonusChoice));
+                items.Add(Grant(plr, bonusChoice, 0, null));
 
             _logger.Debug("Random shop roll package={PackageId} items={Items} gauge={Gauge}",
                 package.Id, string.Join(",", items.Select(x => x.ItemId.Id)), gauge);
             return new RollResult(ResultSuccess, items.ToArray());
         }
 
-        /// <summary>Weighted pick of a period; null when no period has a weight.</summary>
+        /// <summary>Weighted pick of a new_random_shop.x7 period; null when no period has a weight.</summary>
         public static RandomShopPeriod RollPeriod(RandomShopInfo info, RandomShopKind kind, Random random)
         {
-            var total = info.Periods.Sum(x => (long)Math.Max(0, x.GetWeight(kind)));
-            if (total <= 0)
-                return null;
+            return RandomShopOdds.Pick(info.Periods, x => x.GetWeight(kind), random);
+        }
 
-            var pick = random.NextInt64(total);
-            foreach (var period in info.Periods)
+        /// <summary>
+        /// Rolls the prize of a package: the entry by weight, then its period, colour and effect, each
+        /// by weight from the entry's groups (see <see cref="BuildEntry"/>). Effects is null when the
+        /// prize gets its shop effects. No period weight means permanent.
+        /// </summary>
+        public static Prize RollPrize(RandomShopPackage package, Random random)
+        {
+            var entry = RandomShopOdds.Pick(package.Entries, x => x.Weight, random)
+                        ?? package.Entries[random.Next(package.Entries.Count)];
+            var period = RandomShopOdds.Pick(entry.Periods, random)?.Value;
+            var color = RandomShopOdds.Pick(entry.Colors, random)?.Value ?? 0;
+            uint[] effects = null;
+            if (!entry.UseShopEffects)
             {
-                pick -= Math.Max(0, period.GetWeight(kind));
-                if (pick < 0)
-                    return period;
+                var effect = RandomShopOdds.Pick(entry.Effects, random);
+                effects = effect == null ? Array.Empty<uint>() : new[] { effect.Value };
             }
 
-            return info.Periods[info.Periods.Count - 1];
+            return new Prize(entry.Item, period?.PeriodType ?? ItemPeriodType.None, period?.Period ?? 0, color, effects);
         }
 
         /// <summary>
@@ -189,15 +203,17 @@ namespace OpenS4L.Server.Game.Services
                    info.PriceGroup.Prices.Any(x => x.IsEnabled);
         }
 
-        private static RandomShopRollingDto Grant(Player plr, (ShopItemInfo info, ShopPrice price) choice)
+        /// <param name="effects">null: all effects of the shop item's effect group</param>
+        private static RandomShopRollingDto Grant(Player plr, (ShopItemInfo info, ShopPrice price) choice, byte color, uint[] effects)
         {
-            var effects = choice.info.EffectGroup?.Effects.Select(x => x.Effect).Where(x => x != 0).ToArray()
-                          ?? Array.Empty<uint>();
+            effects = effects
+                      ?? choice.info.EffectGroup?.Effects.Select(x => x.Effect).Where(x => x != 0).ToArray()
+                      ?? Array.Empty<uint>();
 
             // Sends ItemUpdateInventoryAck(Add) - the client looks the prize up in its inventory by id.
             // ShopItemId is only 32 bits on the wire (and in the client's 28-byte struct) while item ids
             // from IdGeneratorService are 64-bit, so the client gets the low 32 bits. Known limitation.
-            var item = plr.Inventory.Create(choice.info, choice.price, 0, effects);
+            var item = plr.Inventory.Create(choice.info, choice.price, color, effects);
             return new RandomShopRollingDto
             {
                 ItemId = item.ItemNumber,
@@ -233,8 +249,95 @@ namespace OpenS4L.Server.Game.Services
         /// <summary>
         /// Builds the packages from the shop: weapons by sub category, costumes by gender and slot.
         /// Only items with an enabled PEN price are included; empty packages are left out.
+        /// <paramref name="knownEffects"/> (effect_list.x7) limits the 2019 effects to the ones the
+        /// server knows; null accepts every effect.
         /// </summary>
-        public static IReadOnlyList<RandomShopPackage> BuildPackages(IEnumerable<ShopItem> shopItems, RandomShopInfo info)
+        public static IReadOnlyList<RandomShopPackage> BuildPackages(IEnumerable<ShopItem> shopItems, RandomShopInfo info,
+            IReadOnlyDictionary<uint, ItemEffect> knownEffects = null)
+        {
+            var packages = BuildPackageItems(shopItems, info);
+            foreach (var package in packages)
+                package.Entries = package.Items.Select(x => BuildEntry(x, package.Kind, info, knownEffects)).ToList();
+            return packages;
+        }
+
+        /// <summary>
+        /// What a prize can roll. Without 2019 odds (<see cref="RandomShopInfo.Odds"/> null) this is
+        /// the behaviour from before the 2019 file: weight 1 (uniform), the new_random_shop.x7 period
+        /// weights of the package kind, all effects of the shop effect group and colour 0.
+        /// With odds, each part takes the 2019 group from <see cref="RandomShopOdds.GetSlot"/> and
+        /// falls back to that behaviour on its own when the group is missing or nothing of it is left:
+        /// <list type="bullet">
+        /// <item>period: the group's entries with prob &gt; 0</item>
+        /// <item>effect: one effect by prob, limited to effects in <paramref name="knownEffects"/></item>
+        /// <item>colour: by prob, limited to the item's colours (0..ShopItem.ColorGroup); a group cut
+        /// down that way gets its own name ("Dist_4@2") so the client data stays exact</item>
+        /// <item>weight: the 2019 prob of the item, or the derived one</item>
+        /// </list>
+        /// </summary>
+        public static RandomShopEntry BuildEntry(ShopItem item, RandomShopKind kind, RandomShopInfo info,
+            IReadOnlyDictionary<uint, ItemEffect> knownEffects = null)
+        {
+            var shopInfo = item.ItemInfos.First(IsUsable);
+            var colors = Math.Max(0, item.ColorGroup);
+            var entry = new RandomShopEntry
+            {
+                Item = item,
+                Weight = 1,
+                PeriodGroup = PeriodGroup,
+                Periods = info.Periods.Select(x => new RandomShopWeighted<RandomShopPeriod>(x, x.GetWeight(kind))).ToList(),
+                EffectGroup = GetEffectGroupName(shopInfo.EffectGroup),
+                Effects = (shopInfo.EffectGroup?.Effects.Select(x => x.Effect).Where(x => x != 0) ?? Enumerable.Empty<uint>())
+                    .Select(x => new RandomShopWeighted<uint>(x, 1)).ToList(),
+                UseShopEffects = true,
+                ColorGroup = GetColorGroupName(colors),
+                Colors = Enumerable.Range(0, colors + 1).Select(x => new RandomShopWeighted<byte>((byte)x, x == 0 ? 1 : 0)).ToList()
+            };
+
+            var odds = info.Odds;
+            if (odds == null)
+                return entry;
+
+            var slot = odds.GetSlot(item.ItemNumber, kind);
+            entry.Weight = Math.Max(1, slot.Weight);
+
+            if (slot.PeriodGroup != null && odds.PeriodGroups.TryGetValue(slot.PeriodGroup, out var periods))
+            {
+                var usable = periods.Where(x => x.Weight > 0).ToList();
+                if (usable.Count > 0)
+                {
+                    entry.PeriodGroup = slot.PeriodGroup;
+                    entry.Periods = usable;
+                }
+            }
+
+            if (slot.EffectGroup != null && odds.EffectGroups.TryGetValue(slot.EffectGroup, out var effects))
+            {
+                var usable = effects
+                    .Where(x => x.Weight > 0 && x.Value != 0 && (knownEffects == null || knownEffects.ContainsKey(x.Value)))
+                    .ToList();
+                if (usable.Count > 0)
+                {
+                    entry.EffectGroup = slot.EffectGroup;
+                    entry.Effects = usable;
+                    entry.UseShopEffects = false;
+                }
+            }
+
+            if (slot.ColorGroup != null && odds.ColorGroups.TryGetValue(slot.ColorGroup, out var groupColors))
+            {
+                var usable = groupColors.Where(x => x.Weight > 0 && x.Value <= colors).ToList();
+                if (usable.Count > 0)
+                {
+                    entry.ColorGroup = usable.Count == groupColors.Count ? slot.ColorGroup : slot.ColorGroup + "@" + colors;
+                    entry.Colors = usable;
+                }
+            }
+
+            return entry;
+        }
+
+        private static List<RandomShopPackage> BuildPackageItems(IEnumerable<ShopItem> shopItems, RandomShopInfo info)
         {
             var items = shopItems
                 .Where(x => x.ItemInfos.Any(IsUsable))
@@ -315,68 +418,74 @@ namespace OpenS4L.Server.Game.Services
                     w.WriteProudString(package.Gender == Gender.Male ? "man" : package.Gender == Gender.Female ? "woman" : "all");
                 }
 
-                var lineup = packages
-                    .SelectMany(package => package.Items.Select(item => (package, item, info: item.ItemInfos.First(IsUsable))))
-                    .ToList();
+                // Every group a lineup entry names, once, in first-use order. Entries sharing a group
+                // name share its content (see BuildEntry), so the first one stands for all.
+                var lineup = packages.SelectMany(package => package.Entries.Select(entry => (package, entry))).ToList();
+                var entries = lineup.Select(x => x.entry).ToList();
 
-                var effectGroups = lineup
-                    .Select(x => x.info.EffectGroup)
-                    .GroupBy(x => GetEffectGroupName(x))
-                    .Select(x => (name: x.Key, effects: x.First()?.Effects.Select(e => e.Effect).Where(e => e != 0).ToArray() ?? Array.Empty<uint>()))
-                    .ToList();
-                var effectCount = effectGroups.Sum(x => Math.Max(1, x.effects.Length));
-                w.Write(effectCount);
-                foreach (var (name, effects) in effectGroups)
+                var effectGroups = Distinct(entries, x => x.EffectGroup);
+                w.Write(effectGroups.Sum(x => Math.Max(1, x.Effects.Count)));
+                foreach (var entry in effectGroups)
                 {
-                    foreach (var effect in effects.Length == 0 ? new uint[] { 0 } : effects)
+                    var effects = entry.Effects.Count == 0 ? new uint[] { 0 } : entry.Effects.Select(x => x.Value);
+                    foreach (var effect in effects)
                     {
                         w.Write(0);
                         w.Write((byte)0);
-                        w.WriteProudString(name);
+                        w.WriteProudString(entry.EffectGroup);
                         w.Write(effect);
                     }
                 }
 
-                var colorGroups = lineup.Select(x => Math.Max(0, x.item.ColorGroup)).Distinct().OrderBy(x => x).ToList();
-                w.Write(colorGroups.Sum(x => x + 1));
-                foreach (var colors in colorGroups)
+                var colorGroups = Distinct(entries, x => x.ColorGroup);
+                w.Write(colorGroups.Sum(x => x.Colors.Count));
+                foreach (var entry in colorGroups)
                 {
-                    for (var color = 0; color <= colors; ++color)
+                    foreach (var color in entry.Colors)
                     {
                         w.Write(0);
                         w.Write((byte)0);
-                        w.WriteProudString(GetColorGroupName(colors));
-                        w.Write((byte)color);
+                        w.WriteProudString(entry.ColorGroup);
+                        w.Write(color.Value);
                     }
                 }
 
                 w.Write(lineup.Count);
-                foreach (var (package, item, shopInfo) in lineup)
+                foreach (var (package, entry) in lineup)
                 {
                     w.Write(0);
                     w.Write((byte)0);
                     w.Write(package.Id);
                     w.WriteProudString("item");
                     w.Write(1);
-                    w.Write((int)item.ItemNumber.Id);
-                    w.WriteProudString(GetColorGroupName(Math.Max(0, item.ColorGroup)));
-                    w.WriteProudString(GetEffectGroupName(shopInfo.EffectGroup));
-                    w.WriteProudString(PeriodGroup);
+                    w.Write((int)entry.Item.ItemNumber.Id);
+                    w.WriteProudString(entry.ColorGroup);
+                    w.WriteProudString(entry.EffectGroup);
+                    w.WriteProudString(entry.PeriodGroup);
                     w.Write(0);
                 }
 
-                w.Write(info.Periods.Count);
-                foreach (var period in info.Periods)
+                var periodGroups = Distinct(entries, x => x.PeriodGroup);
+                w.Write(periodGroups.Sum(x => x.Periods.Count));
+                foreach (var entry in periodGroups)
                 {
-                    w.Write(0);
-                    w.Write((byte)0);
-                    w.WriteProudString(PeriodGroup);
-                    w.Write((int)period.PeriodType);
-                    w.Write((int)period.Period);
+                    foreach (var period in entry.Periods)
+                    {
+                        w.Write(0);
+                        w.Write((byte)0);
+                        w.WriteProudString(entry.PeriodGroup);
+                        w.Write((int)period.Value.PeriodType);
+                        w.Write((int)period.Value.Period);
+                    }
                 }
 
                 return ((MemoryStream)w.BaseStream).ToArray();
             }
+        }
+
+        private static List<RandomShopEntry> Distinct(IEnumerable<RandomShopEntry> entries, Func<RandomShopEntry, string> group)
+        {
+            return entries.GroupBy(group, StringComparer.Ordinal).Select(x => x.First()).ToList();
         }
 
         private static string GetEffectGroupName(ShopEffectGroup group)
@@ -393,12 +502,14 @@ namespace OpenS4L.Server.Game.Services
         {
             var shopItems = _gameDataService.ShopItems ?? ImmutableDictionary<ItemNumber, ShopItem>.Empty;
             var info = _gameDataService.RandomShop;
+            var effects = _gameDataService.Effects;
             lock (_cacheSync)
             {
-                if (_packages != null && ReferenceEquals(_cachedShopItems, shopItems) && ReferenceEquals(_cachedInfo, info))
+                if (_packages != null && ReferenceEquals(_cachedShopItems, shopItems) && ReferenceEquals(_cachedInfo, info) &&
+                    ReferenceEquals(_cachedEffects, effects))
                     return;
 
-                var packages = BuildPackages(shopItems.Values, info);
+                var packages = BuildPackages(shopItems.Values, info, effects);
                 var data = BuildClientData(packages, info);
                 string version;
                 using (var sha = SHA256.Create())
@@ -408,7 +519,9 @@ namespace OpenS4L.Server.Game.Services
                 _clientData = Compress(data, version);
                 _cachedShopItems = shopItems;
                 _cachedInfo = info;
-                _logger.Information("Random shop: {Count} packages, data version {Version}", packages.Count, version);
+                _cachedEffects = effects;
+                _logger.Information("Random shop: {Count} packages, {Odds}, data version {Version}", packages.Count,
+                    info.Odds == null ? "new_random_shop.x7 odds" : "2019 odds", version);
             }
         }
 
@@ -444,6 +557,26 @@ namespace OpenS4L.Server.Game.Services
                 CompressedLength = compressedLength;
                 DecompressedLength = decompressedLength;
                 Version = version;
+            }
+        }
+
+        public class Prize
+        {
+            public ShopItem Item { get; }
+            public ItemPeriodType PeriodType { get; }
+            public ushort Period { get; }
+            public byte Color { get; }
+
+            /// <summary>null: the shop item's own effects</summary>
+            public uint[] Effects { get; }
+
+            public Prize(ShopItem item, ItemPeriodType periodType, ushort period, byte color, uint[] effects)
+            {
+                Item = item;
+                PeriodType = periodType;
+                Period = period;
+                Color = color;
+                Effects = effects;
             }
         }
 
