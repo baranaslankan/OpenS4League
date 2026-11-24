@@ -103,16 +103,27 @@ namespace OpenS4L.Server.Game.Services
             return mapDto.id > byte.MaxValue;
         }
 
-        private void LoadEffectMatches()
+        private void LoadEffectMatches(StringTableDto names)
         {
             var path = Path.Combine(_resourcePath, "xml", "effect_match_list.x7");
             if (!File.Exists(path))
                 return;
 
-            EffectMatches = XDocument.Load(path).Descendants("match_key")
-                .Select(x => uint.TryParse((string)x.Attribute("id"), out var id) ? id : 0)
-                .Where(x => x != 0)
-                .ToImmutableHashSet();
+            var nameOf = new Dictionary<string, string>(StringComparer.InvariantCultureIgnoreCase);
+            foreach (var s in names?.@string ?? Array.Empty<StringTableStringDto>())
+            {
+                if (s.key != null)
+                    nameOf[s.key] = s.eng ?? "";
+            }
+
+            var groups = XDocument.Load(path).Descendants("match_key")
+                .Select(x => (Id: uint.TryParse((string)x.Attribute("id"), out var id) ? id : 0,
+                    Name: nameOf.GetValueOrDefault((string)x.Attribute("name_key") ?? "", "")))
+                .Where(x => x.Id != 0)
+                .GroupBy(x => x.Id)
+                .ToImmutableDictionary(x => x.Key, x => x.First().Name);
+            EffectMatches = groups.Keys.ToImmutableHashSet();
+            EffectMatchNames = groups;
             _logger.Information("Loaded {Count} effect groups", EffectMatches.Count);
         }
 
@@ -123,7 +134,7 @@ namespace OpenS4L.Server.Game.Services
             var stringTable = Deserialize<StringTableDto>("language/xml/item_effect_string_table.x7");
             Effects = Transform().ToImmutableDictionary(x => x.Id, x => x);
             _logger.Information("Loaded {Count} effects", Effects.Count);
-            LoadEffectMatches();
+            LoadEffectMatches(stringTable);
 
             IEnumerable<ItemEffect> Transform()
             {
@@ -443,12 +454,15 @@ namespace OpenS4L.Server.Game.Services
         /// <summary>
         /// Capsule rewards: the optional server-side table <c>server/ItemBag.xml</c> (with odds) wins;
         /// every other capsule in the client's tooltip file gives one of its listed rewards per slot,
-        /// all equally likely.
+        /// all equally likely. Either way the tooltip's per-reward text (periods and stats) is applied,
+        /// its stats mapped to effect ids preferring the ones the official EU shop
+        /// (<c>server/eu2019</c>) gave the item.
         /// </summary>
         public void LoadCapsules()
         {
             _logger.Information("Loading capsules...");
             var capsules = new Dictionary<ItemNumber, CapsuleInfo>();
+            var tooltips = new Dictionary<ItemNumber, CapsuleInfo>();
 
             var tooltipPath = Path.Combine(_resourcePath, "xml", "_eu_item_tooltip_addcapsule.x7");
             var stringsPath = Path.Combine(_resourcePath, "language", "xml", "tooltipinfo_string_table.x7");
@@ -466,7 +480,7 @@ namespace OpenS4L.Server.Game.Services
                 }
 
                 foreach (var capsule in CapsuleDataParser.ParseTooltip(XDocument.Load(tooltipPath), strings))
-                    capsules[capsule.ItemNumber] = capsule;
+                    capsules[capsule.ItemNumber] = tooltips[capsule.ItemNumber] = capsule;
             }
             else
             {
@@ -475,10 +489,12 @@ namespace OpenS4L.Server.Game.Services
 
             var tablePath = Path.Combine(_resourcePath, "server", "ItemBag.xml");
             var fromTable = 0;
+            var corrected = 0;
             if (File.Exists(tablePath))
             {
                 foreach (var capsule in CapsuleDataParser.ParseRewardTable(XDocument.Load(tablePath)))
                 {
+                    corrected += CapsuleDataParser.ApplyTooltip(capsule, tooltips.GetValueOrDefault(capsule.ItemNumber));
                     capsules[capsule.ItemNumber] = capsule;
                     ++fromTable;
                 }
@@ -488,12 +504,59 @@ namespace OpenS4L.Server.Game.Services
                 _logger.Information("No capsule reward table at {Path}; all capsules use equal odds", tablePath);
             }
 
+            var resolver = CreateCapsuleEffectResolver(capsules.Values);
+            var unmapped = new Dictionary<string, int>();
             foreach (var capsule in capsules.Values)
+            {
+                CapsuleDataParser.ResolveEffects(capsule, resolver, (reward, option) =>
+                {
+                    var key = $"{reward.ItemNumber.Category}/{reward.ItemNumber.SubCategory} \"{option.StatText}\"";
+                    unmapped[key] = unmapped.GetValueOrDefault(key) + 1;
+                });
                 CapsuleDataParser.ApplyBoxPeriod(capsule, Items.GetValueOrDefault(capsule.ItemNumber)?.Name);
+            }
+
+            if (unmapped.Count > 0)
+            {
+                _logger.Warning(
+                    "Capsules: {Count} tooltip stat texts ({Rewards} rewards) match no effect and keep the reward table's or shop's stats: {Texts}",
+                    unmapped.Count, unmapped.Values.Sum(),
+                    string.Join("; ", unmapped.OrderByDescending(x => x.Value).Select(x => $"{x.Key} x{x.Value}")));
+            }
 
             Capsules = capsules.ToImmutableDictionary();
-            _logger.Information("Loaded {Count} capsules ({FromTable} with odds from the reward table)",
-                Capsules.Count, fromTable);
+            _logger.Information(
+                "Loaded {Count} capsules ({FromTable} with odds from the reward table, {Corrected} table rewards corrected by the tooltip)",
+                Capsules.Count, fromTable, corrected);
+        }
+
+        private CapsuleEffectResolver CreateCapsuleEffectResolver(IEnumerable<CapsuleInfo> capsules)
+        {
+            var resolver = new CapsuleEffectResolver(
+                (Effects ?? ImmutableDictionary<uint, ItemEffect>.Empty).ToDictionary(x => x.Key, x => x.Value.Name ?? ""),
+                EffectMatchNames);
+
+            var itemsPath = Path.Combine(_resourcePath, "server", "eu2019", "_eu_new_shop_item.xml");
+            var effectsPath = Path.Combine(_resourcePath, "server", "eu2019", "_eu_new_shop_effect.xml");
+            if (File.Exists(itemsPath) && File.Exists(effectsPath))
+            {
+                try
+                {
+                    foreach (var (item, sets) in CapsuleEffectResolver.ReadShopEffects(XDocument.Load(itemsPath),
+                                 XDocument.Load(effectsPath)))
+                        resolver.AddShopEffects(item, sets);
+                }
+                catch (Exception ex) when (ex is System.Xml.XmlException || ex is IOException)
+                {
+                    _logger.Warning(ex, "Capsules: EU shop effects at {Path} unusable", itemsPath);
+                }
+            }
+
+            foreach (var reward in capsules.Where(c => c.Source == CapsuleSource.RewardTable)
+                         .SelectMany(c => c.Groups).SelectMany(g => g.Rewards)
+                         .Where(r => r.Type == CapsuleRewardType.Item && r.Effects.Length > 0))
+                resolver.AddTableEffects(reward.ItemNumber.Id, reward.Effects);
+            return resolver;
         }
 
         public async Task LoadLevelRewards()
