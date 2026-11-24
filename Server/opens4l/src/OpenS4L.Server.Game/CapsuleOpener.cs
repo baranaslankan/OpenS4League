@@ -34,7 +34,7 @@ namespace OpenS4L.Server.Game
             if (rolled.Count == 0)
                 return null;
 
-            plr.Inventory.Remove(capsule);
+            plr.Inventory.UseOne(capsule);
 
             var result = new List<CapsuleRewardDto>();
             var penGained = false;

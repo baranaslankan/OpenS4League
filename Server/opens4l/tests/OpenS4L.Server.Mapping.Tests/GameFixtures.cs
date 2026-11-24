@@ -192,6 +192,32 @@ namespace OpenS4L.Server.Mapping.Tests
             Stash.ShopItemInfo = info;
         }
 
+        /// <summary>Adds a free per-unit price group (1 and 5 units), like the provisioned consumables.</summary>
+        public static int SeedUnitPriceGroup(GameDataService gds, int id = 11)
+        {
+            var group = new ShopPriceGroup(new ShopPriceGroupEntity
+            {
+                Id = id,
+                PriceType = (byte)ItemPriceType.PEN,
+                Name = "units",
+                ShopPrices = new List<ShopPriceEntity>
+                {
+                    new ShopPriceEntity
+                    {
+                        Id = id * 10 + 1, PriceGroupId = id, PeriodType = (byte)ItemPeriodType.Units,
+                        Period = 1, Price = 0, IsRefundable = true, Durability = 1, IsEnabled = true
+                    },
+                    new ShopPriceEntity
+                    {
+                        Id = id * 10 + 5, PriceGroupId = id, PeriodType = (byte)ItemPeriodType.Units,
+                        Period = 5, Price = 0, IsRefundable = true, Durability = 1, IsEnabled = true
+                    }
+                }
+            });
+            Set(gds, "ShopPrices", gds.ShopPrices.SetItem(id, group));
+            return id;
+        }
+
         /// <summary>Builds a DefaultItem whose SubCategory encodes the costume slot.</summary>
         private static DefaultItem DefaultItem(uint id, CharacterGender gender, byte subCategory)
         {

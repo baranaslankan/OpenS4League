@@ -145,7 +145,22 @@ def tabs_for(item_id):
     if cat == 2:          # Weapon
         weapon_sub = {0: 1, 1: 3, 2: 4, 3: 5, 4: 6, 5: 7, 6: 6}
         return 2, weapon_sub.get(sub, 8)
-    return 2, 8            # Skill + others -> render under weapon tab, sub 8
+    if cat == 3:          # Skill
+        return 2, 8
+    if cat == 7:          # Esper chip
+        return 2, 8
+    return 4, 6            # one-time-use items (capsules, boosts, coupons): items tab
+
+
+# Categories sold per unit (stackable, one-time use): everything except costumes (1),
+# weapons (2), skills (3) and esper chips (7). Matches how other S4 emulators set up the
+# Season 8 shop; the official price list is not part of the client.
+def is_consumable(item_id):
+    return item_id // 1000000 not in (1, 2, 3, 7)
+
+
+# Free per-unit prices (Id, units). Id 1 stays the free permanent price.
+UNIT_PRICES = ((2, 1), (3, 2), (4, 5), (5, 10))
 
 
 def _load_item_map():
@@ -217,14 +232,20 @@ def apply_shop():
                 'INSERT INTO "shop_prices" '
                 '("Id", "PriceGroupId", "PeriodType", "Period", "Price", "IsRefundable", "Durability", "IsEnabled") '
                 "VALUES (1, 1, 1, 0, 0, TRUE, 2400000, TRUE)")  # permanent, free, high durability
+            cur.execute('INSERT INTO "shop_price_groups" ("Id", "Name", "PriceType") VALUES (2, %s, 1)', ("FreeUnits",))
+            for price_id, units in UNIT_PRICES:
+                cur.execute(
+                    'INSERT INTO "shop_prices" '
+                    '("Id", "PriceGroupId", "PeriodType", "Period", "Price", "IsRefundable", "Durability", "IsEnabled") '
+                    "VALUES (%s, 2, 4, %s, 0, TRUE, 1, TRUE)", (price_id, units))  # 4 = Units
             for item_id, gender in sorted(items.items()):
                 main, sub = tabs_for(item_id)
                 cur.execute(
                     'INSERT INTO "shop_items" '
                     '("Id", "RequiredGender", "RequiredLicense", "Colors", "UniqueColors", "RequiredLevel", '
                     '"LevelLimit", "RequiredMasterLevel", "IsOneTimeUse", "IsDestroyable", "MainTab", "SubTab") '
-                    "VALUES (%s, %s, 0, 0, 0, 0, 0, 0, FALSE, TRUE, %s, %s)",
-                    (item_id, gender, main, sub))
+                    "VALUES (%s, %s, 0, 0, 0, 0, 0, 0, %s, TRUE, %s, %s)",
+                    (item_id, gender, is_consumable(item_id), main, sub))
                 iteminfo_id = existing_iteminfo_ids.get(item_id)
                 if iteminfo_id is None:
                     iteminfo_id = next_id
@@ -232,18 +253,38 @@ def apply_shop():
                 cur.execute(
                     'INSERT INTO "shop_iteminfos" '
                     '("Id", "ShopItemId", "PriceGroupId", "EffectGroupId", "DiscountPercentage", "IsEnabled") '
-                    "VALUES (%s, %s, 1, 1, 0, TRUE)",
-                    (iteminfo_id, item_id))
+                    "VALUES (%s, %s, %s, 1, 0, TRUE)",
+                    (iteminfo_id, item_id, 2 if is_consumable(item_id) else 1))
             # Explicit Ids were inserted above, so bump the identity sequence past the
             # highest one used or the next auto-assigned (non-reprovision) insert would
             # collide with it.
             cur.execute('SELECT setval(pg_get_serial_sequence(%s, %s), %s)',
                         ("shop_iteminfos", "Id", next_id - 1 if next_id > 1 else 1))
+            # Owned items must reference a price in their item's price group, or the game server
+            # can't load them: move consumables to 1 unit and everything else to permanent.
+            cur.execute(
+                'UPDATE "player_items" pi SET "ShopPriceId" = CASE WHEN i."PriceGroupId" = 2 THEN 2 ELSE 1 END '
+                'FROM "shop_iteminfos" i WHERE i."Id" = pi."ShopItemInfoId"')
+            # Per-unit items stack (the client shows durability as the count): fold duplicate rows
+            # into the oldest one. Rows from before stacking carry a permanent-price durability, so
+            # anything implausibly large counts as one unit. Safe to re-run.
+            cur.execute(
+                'WITH g AS ('
+                '  SELECT pi."PlayerId", pi."ShopItemInfoId", pi."Color", MIN(pi."Id") AS keep,'
+                '         SUM(CASE WHEN pi."Durability" BETWEEN 1 AND 100000 THEN pi."Durability" ELSE 1 END) AS n'
+                '  FROM "player_items" pi JOIN "shop_iteminfos" i ON i."Id" = pi."ShopItemInfoId"'
+                '  WHERE i."PriceGroupId" = 2 GROUP BY 1, 2, 3)'
+                ' UPDATE "player_items" pi SET "Durability" = g.n FROM g WHERE pi."Id" = g.keep')
+            cur.execute(
+                'DELETE FROM "player_items" pi USING "shop_iteminfos" i '
+                'WHERE i."Id" = pi."ShopItemInfoId" AND i."PriceGroupId" = 2 AND EXISTS ('
+                '  SELECT 1 FROM "player_items" o WHERE o."PlayerId" = pi."PlayerId"'
+                '  AND o."ShopItemInfoId" = pi."ShopItemInfoId" AND o."Color" = pi."Color" AND o."Id" < pi."Id")')
             cur.execute('INSERT INTO "shop_version" ("Id", "Version") VALUES (1, %s)',
                         (str(int(time.time())),))
         finally:
             cur.execute("SET session_replication_role = 'origin'")
-    print(f"[provision] shop: {len(items)} items enabled (free, permanent, correct tabs)")
+    print(f"[provision] shop: {len(items)} items enabled (free; consumables per unit, the rest permanent)")
     if missing_weapon_data:
         print(f"[provision] shop: {len(missing_weapon_data)} weapon(s) skipped - no _eu_weapon.x7 "
               f"data (likely won't render): {missing_weapon_data}")

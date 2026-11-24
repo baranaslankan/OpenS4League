@@ -190,11 +190,50 @@ namespace OpenS4L.Server.Mapping.Tests
             Assert.Equal(CapsuleOpener.ResultFailed, ack.Result);
         }
 
+        [Fact]
+        public async Task PerUnitItems_stackInOneEntry()
+        {
+            var (plr, _) = await LoginWithCapsuleAsync(9305);
+
+            var again = plr.Inventory.CreateFromShop(Capsule);
+
+            var stack = Assert.Single(plr.Inventory.Where(x => x.ItemNumber == Capsule));
+            Assert.Same(stack, again);
+            Assert.Equal(ItemPeriodType.Units, stack.PeriodType);
+            Assert.Equal(2, stack.Durability);
+        }
+
+        [Fact]
+        public async Task PerUnitItems_buyingFiveUnitsAddsFive()
+        {
+            var (plr, _) = await LoginWithCapsuleAsync(9306);
+
+            plr.Inventory.CreateFromShop(Capsule, ItemPeriodType.Units, 5);
+
+            Assert.Equal(6, plr.Inventory.Single(x => x.ItemNumber == Capsule).Durability);
+        }
+
+        [Fact]
+        public async Task Open_fromStack_usesOneAndKeepsTheRest()
+        {
+            var (plr, channel) = await LoginWithCapsuleAsync(9307);
+            var capsule = plr.Inventory.CreateFromShop(Capsule);
+            Assert.Equal(2, capsule.Durability);
+
+            Assert.NotNull(CapsuleOpener.Open(plr, capsule, _ctx.GameData, new Random(3)));
+
+            Assert.Contains(plr.Inventory, x => x.Id == capsule.Id);
+            Assert.Equal(1, capsule.Durability);
+            var update = channel.Outbound.Select(o => o.GetType().GetProperty("Message")?.GetValue(o))
+                .OfType<ItemUpdateInventoryAckMessage>().Last(m => m.Item.Id == capsule.Id);
+            Assert.Equal(InventoryAction.Update, update.Action);
+        }
+
         private async Task<(Player, FakeSocketChannel)> LoginWithCapsuleAsync(uint accountId, bool rewardInShop = true,
             bool withPen = true)
         {
             var gds = _ctx.GameData;
-            GameFixtures.SeedShopItem(gds, Capsule);
+            GameFixtures.SeedShopItem(gds, Capsule, GameFixtures.SeedUnitPriceGroup(gds));
             if (rewardInShop)
                 GameFixtures.SeedShopItem(gds, Gun);
 

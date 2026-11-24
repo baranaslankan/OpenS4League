@@ -160,6 +160,55 @@ namespace OpenS4L.Server.Game
         /// </summary>
         public PlayerItem Create(ShopItemInfo shopItemInfo, ShopPrice price, byte color, uint[] effects, bool sendUpdate = true)
         {
+            // Per-unit items stack: the client shows an item's durability as its count.
+            if (price.PeriodType == ItemPeriodType.Units)
+            {
+                var units = Math.Max(1, (int)price.Period);
+                var stack = _items.Values.FirstOrDefault(x => x.ItemNumber == shopItemInfo.ShopItem.ItemNumber &&
+                                                              x.PeriodType == ItemPeriodType.Units && x.Color == color);
+                if (stack != null)
+                {
+                    stack.Durability += units;
+                    if (sendUpdate)
+                        SendStackUpdate(stack);
+                    return stack;
+                }
+
+                var first = CreateNew(shopItemInfo, price, color, effects, false);
+                first.Durability = units;
+                if (sendUpdate)
+                    Player.Session.Send(new ItemUpdateInventoryAckMessage(InventoryAction.Add, _mapper.ToItemDto(first)));
+                return first;
+            }
+
+            return CreateNew(shopItemInfo, price, color, effects, sendUpdate);
+        }
+
+        /// <summary>
+        /// Uses up one of a per-unit item: lowers the stack, or removes the item when it was the last one.
+        /// </summary>
+        public bool UseOne(PlayerItem item)
+        {
+            if (GetItem(item.Id) == null)
+                return false;
+
+            if (item.PeriodType == ItemPeriodType.Units && item.Durability > 1)
+            {
+                item.Durability -= 1;
+                SendStackUpdate(item);
+                return true;
+            }
+
+            return Remove(item);
+        }
+
+        private void SendStackUpdate(PlayerItem item)
+        {
+            Player.Session.Send(new ItemUpdateInventoryAckMessage(InventoryAction.Update, _mapper.ToItemDto(item)));
+        }
+
+        private PlayerItem CreateNew(ShopItemInfo shopItemInfo, ShopPrice price, byte color, uint[] effects, bool sendUpdate)
+        {
             var itemId = _idGeneratorService.GetNextId(IdKind.Item);
             var item = new PlayerItem(_gameDataService, this,
                 itemId, shopItemInfo, price, color, effects, DateTimeOffset.Now);
@@ -189,6 +238,7 @@ namespace OpenS4L.Server.Game
                 .SelectMany(info => info.PriceGroup.Prices.Where(p => p.IsEnabled).Select(price => (info, price)))
                 .OrderBy(x => x.price.PeriodType == periodType && x.price.Period == period ? 0
                     : x.price.PeriodType == ItemPeriodType.None ? 1 : 2)
+                .ThenBy(x => x.price.Period) // per-unit items: one unit
                 .FirstOrDefault();
 
             if (choice.info == null)
