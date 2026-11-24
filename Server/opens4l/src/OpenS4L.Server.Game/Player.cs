@@ -408,7 +408,7 @@ namespace OpenS4L.Server.Game
                 PEN = PEN,
                 TutorialState = (uint)(_gameOptions.EnableTutorial ? TutorialState : 2),
                 Nickname = Account.Nickname,
-                IsGM = Account.SecurityLevel > SecurityLevel.User
+                IsGM = _gameOptions.ShowGMFlag && Account.SecurityLevel > SecurityLevel.User
             }));
 
             SendClubInfo();

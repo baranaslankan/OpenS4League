@@ -3,6 +3,13 @@
     public class GameOptions
     {
         public bool EnableTutorial { get; set; }
+
+        /// <summary>
+        /// Whether staff accounts are flagged as GM to the client. The client then skips some of
+        /// its own checks, but also skips the capsule opening animation. Server-side permissions
+        /// use the account's security level and don't depend on this. Defaults to true.
+        /// </summary>
+        public bool ShowGMFlag { get; set; } = true;
         public int MaxLevel { get; set; }
         public int StartLevel { get; set; }
         public int StartPEN { get; set; }

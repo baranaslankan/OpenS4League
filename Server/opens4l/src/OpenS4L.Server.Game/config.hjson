@@ -36,6 +36,8 @@
   Game:
   {
     EnableTutorial: true
+    # false: staff accounts are not flagged as GM to the client, so capsule animations play
+    ShowGMFlag: true
     EnableLicenseRequirement: true
     MaxLevel: 100
     StartLevel: 0
