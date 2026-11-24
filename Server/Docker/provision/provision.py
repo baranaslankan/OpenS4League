@@ -654,16 +654,17 @@ def load_eu(known_effects, known_matches):
     per item: shop 3 wins over shop 2 for costumes and weapons, shop 2 otherwise."""
     paths = {k: os.path.join(SHOP_EU, f"_eu_new_shop_{k}.xml") for k in ("item", "price", "effect")}
     if not all(os.path.isfile(p) for p in paths.values()):
-        return {}
+        return {}, {}
     try:
         price_root = ET.parse(paths["price"]).getroot()
         item_root = ET.parse(paths["item"]).getroot()
         effect_root = ET.parse(paths["effect"]).getroot()
     except ET.ParseError as e:
         print(f"[provision] shop: {SHOP_EU} unusable ({e}) - ignored")
-        return {}
+        return {}, {}
 
     groups = {}
+    closed = set()  # groups without a single open price: retired listings, their stats still count
     for g in price_root.iter("price_group"):
         # Prices with shop_open=false stay as disabled prices: the shop doesn't offer them,
         # but owned items and capsule rewards can still have that period (e.g. a permanent
@@ -687,6 +688,8 @@ def load_eu(known_effects, known_matches):
             if all(t != PERIOD_UNITS for t, *_ in sig) and (PERIOD_PERMANENT, 0) not in sig:
                 sig[(PERIOD_PERMANENT, 0)] = (PERIOD_PERMANENT, 0, 0, False, False)
             groups[(g.get("shop_id"), g.get("group_name"))] = tuple(sorted(sig.values()))
+        elif sig:
+            closed.add((g.get("shop_id"), g.get("group_name")))
     matches = {}
     for m in effect_root.iter("effect_match"):
         effs = [int(e.get("effect_id")) for e in m.iter("effects") if (e.get("effect_id") or "").isdigit()]
@@ -703,6 +706,7 @@ def load_eu(known_effects, known_matches):
         return preview, str(key), tuple(effs)
 
     out = {}
+    retired = {}  # item -> (rank, effect) from closed listings only
     for it in item_root.iter("item"):
         if not (it.get("key") or "").isdigit():
             continue
@@ -712,18 +716,27 @@ def load_eu(known_effects, known_matches):
             shop_id = info.get("shop_id")
             price_type = EU_SHOPS.get(shop_id)
             sig = groups.get((shop_id, info.get("price_group")))
+            prefer_3 = item_id // 1000000 in (1, 2)
+            if price_type is not None and not sig and (shop_id, info.get("price_group")) in closed:
+                # Not priced any more, but these are still the item's official stats (event
+                # costumes, Style Chips). AP beats PEN, and shop 3 or 2 as for priced listings.
+                rank = (price_type == PRICE_AP, (shop_id == "3") == prefer_3)
+                if item_id not in retired or rank > retired[item_id][0]:
+                    retired[item_id] = (rank, effect(info.get("effect_match")))
+                continue
             if price_type is None or not sig:
                 continue
             listing = (price_type, info.get("price_group"), sig, effect(info.get("effect_match")),
                        min(100, max(0, int(info.get("discount") or 0))))
-            prefer_3 = item_id // 1000000 in (1, 2)
             old = by_type.get(price_type)
             if old is None or (price_type == PRICE_AP and (shop_id == "3") == prefer_3):
                 by_type[price_type] = listing
         if by_type:
             out[item_id] = [by_type[t] for t in sorted(by_type)]
-    print(f"[provision] shop: official EU shop {SHOP_EU}: {len(out)} items priced")
-    return out
+    retired = {i: e for i, (_r, e) in retired.items() if i not in out}
+    print(f"[provision] shop: official EU shop {SHOP_EU}: {len(out)} items priced,"
+          f" {len(retired)} more with official stats only")
+    return out, retired
 
 
 def _effect_of(entry, known_effects, known_matches):
@@ -751,7 +764,7 @@ def apply_shop():
     icons = _load_client_icons()
     known_effects, known_matches = _load_known_effects()
     ref = load_ref()
-    eu = load_eu(known_effects, known_matches)
+    eu, eu_stats = load_eu(known_effects, known_matches)
     if icons is None:
         print(f"[provision] shop: no {CLIENT_ICONS} or {RESOURCES_DIR}/image - not filtering on icons")
 
@@ -818,8 +831,10 @@ def apply_shop():
                     (t, name, tuple((pt, pe, 0 if SHOP_FREE else pr, rf, en) for pt, pe, pr, rf, en in sig), e, d)
                     for t, name, sig, e, d in eu[i]]
             else:
-                listings_of[i] = [(PRICE_PEN, None, _price_sig(i, ref.get(i)),
-                                   _effect_of(ref.get(i), known_effects, known_matches), 0)]
+                # Official stats when the EU shop still has them (None = officially none).
+                stats = (eu_stats[i] if i in eu_stats
+                         else _effect_of(ref.get(i), known_effects, known_matches))
+                listings_of[i] = [(PRICE_PEN, None, _price_sig(i, ref.get(i)), stats, 0)]
 
         # Price groups: one per (price type, signature); 1 = free permanent and 2 = free 1/2/5/10
         # units always exist so their Ids stay what they always were.
