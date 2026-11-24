@@ -97,6 +97,12 @@ namespace OpenS4L.Server.Game.Services
             }
         }
 
+        /// <summary>Updates the cached nickname after a nickname change.</summary>
+        public void SetNickname(ulong accountId, string nickname)
+        {
+            CacheName(accountId, nickname);
+        }
+
         private void OnPlayerConnected(object sender, PlayerEventArgs e)
         {
             CacheName(e.Player.Account.Id, e.Player.Account.Nickname);
