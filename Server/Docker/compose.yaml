@@ -139,6 +139,8 @@ services:
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
       # Day periods stay off until the server sends real expiry dates (items would look expired).
       SHOP_DAY_PERIODS: ${SHOP_DAY_PERIODS:-0}
+      # Original shop listed every set variant: permanent next to 1/7/30 days (basic colour).
+      SHOP_SET_PERIODS: ${SHOP_SET_PERIODS:-all}
     volumes:
       - opens4l-clientdata:/data:ro
     depends_on:
