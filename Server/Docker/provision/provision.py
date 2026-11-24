@@ -509,6 +509,15 @@ def _scan_icons(image_dir):
     return icons
 
 
+def _has_icon(icon, icons):
+    """The EU client draws "_rc_" (Korean) icon names from its "_eu_" files: item.x7 says
+    _rc_icon_pen_plus_50, the image is _eu_icon_pen_plus_50. Anything else must exist as is,
+    even when the reference shop listed the item (its client had icons this one lacks)."""
+    if not icon:
+        return False
+    return icon in icons or (icon.startswith("_rc_") and "_eu_" + icon[4:] in icons)
+
+
 def _load_client_icons():
     """Icon names the client has, or None when neither CLIENT_ICONS nor RESOURCES_DIR exists."""
     if os.path.isfile(CLIENT_ICONS):
@@ -645,7 +654,7 @@ def apply_shop():
     # What the shop lists. Hidden: weapons without _eu_weapon.x7 data (GameDataService has no
     # ability data for them and they likely won't render), items without an English name (the
     # client shows a blank entry: Korean-only content of this client build), items whose icon
-    # the client lacks (unless the reference shop listed them), surplus set period variants.
+    # the client lacks, surplus set period variants.
     reasons = {}
     for item_id in items:
         kor, key, icon = details.get(item_id, ("", "", ""))
@@ -653,7 +662,7 @@ def apply_shop():
             reasons[item_id] = "no weapon data"
         elif names is not None and names.get(key, "").lower() in NAME_MISSING:
             reasons[item_id] = "no English name"
-        elif icons is not None and icon not in icons and item_id not in ref:
+        elif icons is not None and not _has_icon(icon, icons):
             reasons[item_id] = "no icon"
         elif SHOP_REF_ONLY and ref and item_id not in ref:
             reasons[item_id] = "not in reference shop"

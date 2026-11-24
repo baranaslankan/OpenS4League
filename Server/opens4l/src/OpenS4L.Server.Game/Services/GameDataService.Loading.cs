@@ -474,6 +474,9 @@ namespace OpenS4L.Server.Game.Services
                 _logger.Information("No capsule reward table at {Path}; all capsules use equal odds", tablePath);
             }
 
+            foreach (var capsule in capsules.Values)
+                CapsuleDataParser.ApplyBoxPeriod(capsule, Items.GetValueOrDefault(capsule.ItemNumber)?.Name);
+
             Capsules = capsules.ToImmutableDictionary();
             _logger.Information("Loaded {Count} capsules ({FromTable} with odds from the reward table)",
                 Capsules.Count, fromTable);

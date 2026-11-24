@@ -160,6 +160,46 @@ namespace OpenS4L.Server.Game.Data
                 .ToArray();
         }
 
+        private static readonly Regex BoxPeriodRegex =
+            new Regex(@"\(\s*(\d+)\s*(days?|hours?)\s*\)\s*$", RegexOptions.IgnoreCase);
+
+        /// <summary>Reads the period from a set box name such as "Gentle Hearts Set(30Days)" or "... (1 day)".</summary>
+        public static bool TryParseBoxPeriod(string name, out ItemPeriodType periodType, out ushort period)
+        {
+            periodType = ItemPeriodType.None;
+            period = 0;
+            var match = BoxPeriodRegex.Match(name ?? "");
+            if (!match.Success || !ushort.TryParse(match.Groups[1].Value, out period) || period == 0)
+                return false;
+
+            periodType = match.Groups[2].Value.StartsWith("h", StringComparison.OrdinalIgnoreCase)
+                ? ItemPeriodType.Hours
+                : ItemPeriodType.Days;
+            return true;
+        }
+
+        /// <summary>
+        /// Timed set boxes (405xxxx named "(30Days)" etc.) give the same part numbers as the permanent
+        /// box; only the box says how long they last. The reward table lists those parts as permanent,
+        /// so the box name's period is applied to every permanent item reward.
+        /// </summary>
+        public static void ApplyBoxPeriod(CapsuleInfo capsule, string boxName)
+        {
+            if (capsule.ItemNumber.Id / 10000 != 405 || !TryParseBoxPeriod(boxName, out var periodType, out var period))
+                return;
+
+            foreach (var reward in capsule.Groups.SelectMany(g => g.Rewards))
+            {
+                if (reward.Type != CapsuleRewardType.Item)
+                    continue;
+                if (reward.PeriodType != ItemPeriodType.None && reward.PeriodType != 0)
+                    continue;
+
+                reward.PeriodType = periodType;
+                reward.Period = period;
+            }
+        }
+
         private static uint UInt(XElement e, string name)
         {
             return uint.TryParse((string)e.Attribute(name), out var v) ? v : 0;

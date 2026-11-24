@@ -139,6 +139,52 @@ namespace OpenS4L.Server.Mapping.Tests
             Assert.Equal(new uint[] { 1101301006 }, reward.Effects);
         }
 
+        [Theory]
+        [InlineData("Gentle Hearts Set(30Days)", ItemPeriodType.Days, 30)]
+        [InlineData("Battle Maid Set(1day)", ItemPeriodType.Days, 1)]
+        [InlineData("Netsphere Magician Set (7 days)", ItemPeriodType.Days, 7)]
+        [InlineData("Male's beginner Set(3Hour)", ItemPeriodType.Hours, 3)]
+        public void TryParseBoxPeriod_readsNames(string name, ItemPeriodType type, int period)
+        {
+            Assert.True(CapsuleDataParser.TryParseBoxPeriod(name, out var t, out var p));
+            Assert.Equal(type, t);
+            Assert.Equal(period, p);
+        }
+
+        [Fact]
+        public void TryParseBoxPeriod_permanent_isNotTimed()
+        {
+            Assert.False(CapsuleDataParser.TryParseBoxPeriod("Western Girl Set(Permanent)", out _, out _));
+        }
+
+        [Fact]
+        public void ApplyBoxPeriod_timedSetBox_givesTimedParts()
+        {
+            var doc = XDocument.Parse(@"<ItemReward><item Number=""4050099""><group>
+  <reward Type=""2"" Data=""1021016"" PeriodType=""1"" Value=""0"" Color=""0"" Rate=""100"" />
+</group></item></ItemReward>");
+            var capsule = CapsuleDataParser.ParseRewardTable(doc).Single();
+
+            CapsuleDataParser.ApplyBoxPeriod(capsule, "Gentle Hearts Set(30Days)");
+
+            var reward = capsule.Groups[0].Rewards[0];
+            Assert.Equal(ItemPeriodType.Days, reward.PeriodType);
+            Assert.Equal(30, reward.Period);
+        }
+
+        [Fact]
+        public void ApplyBoxPeriod_otherCapsules_areUnchanged()
+        {
+            var doc = XDocument.Parse(@"<ItemReward><item Number=""4030060""><group>
+  <reward Type=""2"" Data=""4050100"" PeriodType=""1"" Value=""0"" Rate=""5"" />
+</group></item></ItemReward>");
+            var capsule = CapsuleDataParser.ParseRewardTable(doc).Single();
+
+            CapsuleDataParser.ApplyBoxPeriod(capsule, "Gentle Hearts Set Capsule(30Days)");
+
+            Assert.Equal(ItemPeriodType.None, capsule.Groups[0].Rewards[0].PeriodType);
+        }
+
         [Fact]
         public void ParseTooltip_penWithoutText_isSkipped()
         {
@@ -208,6 +254,31 @@ namespace OpenS4L.Server.Mapping.Tests
 
             Assert.NotNull(CapsuleOpener.Open(plr, capsule, _ctx.GameData, new Random(1)));
             Assert.Contains(plr.Inventory, x => x.ItemNumber == Gun);
+        }
+
+        [Fact]
+        public async Task CreateFromShop_unknownRewardEffect_usesShopEffects()
+        {
+            var (plr, _) = await LoginWithCapsuleAsync(9309, withPen: false);
+
+            var item = plr.Inventory.CreateFromShop(Gun, effects: new uint[] { 12002 });
+
+            Assert.Equal(new uint[] { 1 }, item.Effects.ToArray());
+        }
+
+        [Fact]
+        public async Task CreateFromShop_timedRewardWithoutExactPeriod_isNeverPermanent()
+        {
+            var (plr, _) = await LoginWithCapsuleAsync(9310, withPen: false);
+            var gun = new ItemNumber(2000099u);
+            GameFixtures.SeedShopItem(_ctx.GameData, gun, GameFixtures.SeedPeriodPriceGroup(_ctx.GameData, 31,
+                (ItemPeriodType.None, 0), (ItemPeriodType.Days, 7), (ItemPeriodType.Days, 30)));
+
+            var exact = plr.Inventory.CreateFromShop(gun, ItemPeriodType.Days, 30);
+            var nearest = plr.Inventory.CreateFromShop(gun, ItemPeriodType.Days, 15);
+
+            Assert.Equal((ItemPeriodType.Days, (ushort)30), (exact.PeriodType, exact.Period));
+            Assert.Equal((ItemPeriodType.Days, (ushort)7), (nearest.PeriodType, nearest.Period));
         }
 
         [Fact]

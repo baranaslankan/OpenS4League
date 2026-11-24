@@ -277,18 +277,30 @@ namespace OpenS4L.Server.Game
                 .SelectMany(info => info.PriceGroup.Prices.Where(p => p.IsEnabled).Select(price => (info, price)))
                 .OrderBy(x => x.info.IsEnabled ? 0 : 1)
                 .ThenBy(x => x.price.PeriodType == periodType && x.price.Period == period ? 0
-                    : x.price.PeriodType == ItemPeriodType.None ? 1 : 2)
+                    // a timed reward without its exact period: the nearest timed price, never permanent
+                    : IsTimed(periodType) && IsTimed(x.price.PeriodType) ? 1
+                    : x.price.PeriodType == ItemPeriodType.None ? 2 : 3)
+                .ThenBy(x => IsTimed(periodType) && IsTimed(x.price.PeriodType)
+                    ? Math.Abs(ToHours(x.price.PeriodType, x.price.Period) - ToHours(periodType, period))
+                    : 0)
                 .ThenBy(x => x.price.Period) // per-unit items: one unit
                 .FirstOrDefault();
 
             if (choice.info == null)
                 return null;
 
+            // Reward tables sometimes carry ids that are not effects (e.g. 12002); those fall back to the shop's.
+            effects = effects?.Where(x => _gameDataService.Effects.ContainsKey(x)).ToArray();
             if (effects == null || effects.Length == 0)
                 effects = choice.info.EffectGroup?.Effects.Select(x => x.Effect).Where(x => x != 0).ToArray()
                           ?? Array.Empty<uint>();
             return Create(choice.info, choice.price, color, effects);
         }
+
+        private static bool IsTimed(ItemPeriodType type) => type == ItemPeriodType.Days || type == ItemPeriodType.Hours;
+
+        private static long ToHours(ItemPeriodType type, ushort period) =>
+            type == ItemPeriodType.Days ? period * 24L : period;
 
         /// <summary>
         /// Removes the item from the inventory

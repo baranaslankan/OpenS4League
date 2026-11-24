@@ -109,9 +109,9 @@ namespace OpenS4L.Server.Mapping.Tests
             Assert.Equal(PriceId(2), item.GetShopPrice().Id);
             Assert.InRange(item.ExpireDate, DateTimeOffset.Now.AddDays(30).AddMinutes(-1), DateTimeOffset.Now.AddDays(30));
 
-            // A period the shop doesn't offer still falls back to permanent.
+            // A period the shop doesn't offer takes the nearest timed price, never permanent.
             var fallback = plr.Inventory.CreateFromShop(Sword, ItemPeriodType.Days, 5);
-            Assert.Equal(ItemPeriodType.None, fallback.PeriodType);
+            Assert.Equal(ItemPeriodType.Days, fallback.PeriodType);
         }
 
         [Fact]
