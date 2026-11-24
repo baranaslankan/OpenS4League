@@ -62,6 +62,7 @@ namespace OpenS4L.Server.Mapping.Tests
             services.Configure<TouchdownOptions>(x => { });
             services.Configure<BattleRoyalOptions>(x => { });
             services.Configure<CaptainOptions>(x => { });
+            services.Configure<ChaserOptions>(x => { });
 
             // DB: InMemory EF by default (fast, isolated per test via the shared root). When a
             // Postgres database is supplied, use the real Npgsql provider so the EF
@@ -101,6 +102,7 @@ namespace OpenS4L.Server.Mapping.Tests
             services.AddTransient<BattleRoyal>();
             services.AddTransient<Captain>();
             services.AddTransient<Practice>();
+            services.AddTransient<Chaser>();
 
             services.AddSingleton<PlayerManager>();
             services.AddSingleton<ChannelService>();

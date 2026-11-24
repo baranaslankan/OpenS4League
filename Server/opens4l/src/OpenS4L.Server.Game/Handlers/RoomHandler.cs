@@ -26,7 +26,8 @@ namespace OpenS4L.Server.Game.Handlers
           IHandle<ScoreDefenseReqMessage>, IHandle<ScoreDefenseAssistReqMessage>, IHandle<ScoreMissionScoreReqMessage>,
           IHandle<RoomChoiceMasterChangeReqMessage>, IHandle<RoomChoiceTeamChangeReqMessage>,
           IHandle<GameKickOutRequestReqMessage>, IHandle<GameKickOutVoteResultReqMessage>,
-          IHandle<RoomQuickJoinReqMessage>, IHandle<RoomQuickStartReqMessage>
+          IHandle<RoomQuickJoinReqMessage>, IHandle<RoomQuickStartReqMessage>,
+          IHandle<SlaughterAttackPointReqMessage>, IHandle<SlaughterHealPointReqMessage>
     {
         private readonly ILogger<RoomHandler> _logger;
         private readonly EquipValidator _equipValidator;
@@ -770,6 +771,46 @@ namespace OpenS4L.Server.Game.Handlers
                 return Task.FromResult(true);
 
             room.GameRule.OnScoreSuicide(plr);
+            return Task.FromResult(true);
+        }
+
+        /// <summary>
+        /// Sent by the chaser's client: AccountId is the survivor that hit the chaser, Unk1 the attack
+        /// points and Unk2 the bonus attack points (CSlaughterKillProcessor, 0x55bc10)
+        /// </summary>
+        [Firewall(typeof(MustBeInRoom))]
+        [Firewall(typeof(MustBeGameState), GameState.Playing)]
+        public Task<bool> OnHandle(MessageContext context, SlaughterAttackPointReqMessage message)
+        {
+            var session = context.GetSession<Session>();
+            var plr = session.Player;
+            var room = plr.Room;
+
+            if (!(room.GameRule is GameRules.Chaser chaser))
+                return Task.FromResult(true);
+
+            var attacker = room.Players.GetValueOrDefault(message.AccountId);
+            if (attacker == null)
+                return Task.FromResult(true);
+
+            chaser.OnAttackPoint(plr, attacker, message.Unk1, message.Unk2);
+            return Task.FromResult(true);
+        }
+
+        /// <summary>
+        /// Unk is the hp the sender healed (CSlaughterHealAssistProcessor, 0x55aaa0)
+        /// </summary>
+        [Firewall(typeof(MustBeInRoom))]
+        [Firewall(typeof(MustBeGameState), GameState.Playing)]
+        public Task<bool> OnHandle(MessageContext context, SlaughterHealPointReqMessage message)
+        {
+            var session = context.GetSession<Session>();
+            var plr = session.Player;
+            var room = plr.Room;
+
+            if (room.GameRule is GameRules.Chaser chaser)
+                chaser.OnHealPoint(plr, message.Unk);
+
             return Task.FromResult(true);
         }
 

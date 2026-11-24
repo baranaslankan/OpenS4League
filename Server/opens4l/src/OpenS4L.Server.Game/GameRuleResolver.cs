@@ -22,6 +22,7 @@ namespace OpenS4L.Server.Game
             Register(GameRule.BattleRoyal, x => typeof(BattleRoyal));
             Register(GameRule.Practice, x => typeof(Practice));
             Register(GameRule.Captain, x => typeof(Captain));
+            Register(GameRule.Chaser, x => typeof(Chaser));
         }
 
         /// <param name="priority">Higher value means higher priority. Default is 10</param>

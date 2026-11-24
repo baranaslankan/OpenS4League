@@ -32,6 +32,7 @@
         public TouchdownOptions Touchdown { get; set; }
         public BattleRoyalOptions BattleRoyal { get; set; }
         public CaptainOptions Captain { get; set; }
+        public ChaserOptions Chaser { get; set; }
     }
 
     public class DeathmatchOptions
@@ -78,6 +79,39 @@
         public int PointsPerRoundWin { get; set; }
         public int PointsPerSuicide { get; set; }
         public int PointsPerHeal { get; set; }
+    }
+
+    /// <summary>
+    /// Chaser (Slaughter). The points default to what the client adds to its own scoreboard,
+    /// the round time defaults to what the client shows (60s + 10s per player above 6, plus an
+    /// intro of 7s for the first round and 4s for the others)
+    /// </summary>
+    public class ChaserOptions
+    {
+        public ExperienceRateOptions ExperienceRates { get; set; }
+        public int PointsPerChaserKill { get; set; } = 2;
+        public int PointsPerBonusKill { get; set; } = 4;
+        public int PointsPerRoundWin { get; set; } = 5;
+        public int PointsPerRoundSurvived { get; set; } = 10;
+
+        /// <summary>Players needed to start the game (at least 2)</summary>
+        public int MinPlayers { get; set; } = 2;
+
+        /// <summary>Round time in seconds</summary>
+        public int RoundTime { get; set; } = 60;
+
+        /// <summary>Seconds added to the round time for every player above <see cref="RoundTimeExtraPlayerThreshold"/></summary>
+        public int RoundTimePerExtraPlayer { get; set; } = 10;
+        public int RoundTimeExtraPlayerThreshold { get; set; } = 6;
+
+        /// <summary>Intro before the first round in seconds</summary>
+        public int FirstRoundIntro { get; set; } = 7;
+
+        /// <summary>Intro before every other round in seconds</summary>
+        public int RoundIntro { get; set; } = 4;
+
+        /// <summary>Wait between two rounds in seconds</summary>
+        public int NextRoundDelay { get; set; } = 5;
     }
 
     public class ExperienceRateOptions

@@ -54,6 +54,37 @@ namespace OpenS4L.Server.Mapping.Tests
             action(context, state);
         }
 
+        /// <summary>Number of pending scheduled actions.</summary>
+        public int PendingCount => _scheduled.Count;
+
+        /// <summary>
+        /// Runs the first pending action that was scheduled with the given context and keeps the
+        /// order of the others. Returns false when there is none.
+        /// </summary>
+        public bool RunNextScheduledFor(object context)
+        {
+            var count = _scheduled.Count;
+            var found = false;
+            (Action<object, object> action, object context, object state) match = default;
+            for (var i = 0; i < count; ++i)
+            {
+                var item = _scheduled.Dequeue();
+                if (!found && ReferenceEquals(item.context, context))
+                {
+                    match = item;
+                    found = true;
+                    continue;
+                }
+
+                _scheduled.Enqueue(item);
+            }
+
+            if (found)
+                match.action(match.context, match.state);
+
+            return found;
+        }
+
         /// <summary>Runs all pending scheduled actions.</summary>
         public void RunAllScheduled()
         {

@@ -137,5 +137,30 @@
       PointsPerSuicide: -1
       PointsPerHeal: 1
     }
+    Chaser:
+    {
+      ExperienceRates:
+      {
+        ScoreFactor: 0.7
+        FirstPlaceBonus: 50
+        SecondPlaceBonus: 30
+        ThirdPlaceBonus: 10
+        PlayerCountFactor: 0.06
+        ExperiencePerMinute: 20
+      }
+      // The points and times below match what the client shows, change them only deliberately
+      PointsPerChaserKill: 2
+      PointsPerBonusKill: 4
+      PointsPerRoundWin: 5
+      PointsPerRoundSurvived: 10
+      MinPlayers: 2
+      // Seconds. Round time = RoundTime + RoundTimePerExtraPlayer for every player above RoundTimeExtraPlayerThreshold
+      RoundTime: 60
+      RoundTimePerExtraPlayer: 10
+      RoundTimeExtraPlayerThreshold: 6
+      FirstRoundIntro: 7
+      RoundIntro: 4
+      NextRoundDelay: 5
+    }
   }
 }
