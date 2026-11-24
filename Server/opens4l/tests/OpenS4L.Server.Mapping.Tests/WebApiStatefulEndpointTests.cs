@@ -160,6 +160,26 @@ namespace OpenS4L.Server.Mapping.Tests
         }
 
         [Fact]
+        public async Task Post_admin_command_setsPEN()
+        {
+            var plr = await LoginAsync(3110);
+            await _ctx.Get<CommandService>().StartAsync(System.Threading.CancellationToken.None);
+            var response = await _client.PostAsync("/admin/command",
+                new FormUrlEncodedContent(new[] { new System.Collections.Generic.KeyValuePair<string, string>("command", "pen 777 3110") }));
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Contains("true", await response.Content.ReadAsStringAsync());
+            Assert.Equal(777u, plr.PEN);
+        }
+
+        [Fact]
+        public async Task Post_admin_command_missingCommand_returns400()
+        {
+            var response = await _client.PostAsync("/admin/command",
+                new FormUrlEncodedContent(new System.Collections.Generic.KeyValuePair<string, string>[0]));
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        }
+
+        [Fact]
         public async Task Post_admin_ban_bansPlayer()
         {
             var plr = await LoginAsync(3105); // LoginAsync seeds the Auth account + player row.
@@ -234,6 +254,7 @@ namespace OpenS4L.Server.Mapping.Tests
                 if (serviceType == typeof(GameDataService)) return _gds;
                 if (serviceType == typeof(PlayerManager)) return _ctx.Get<PlayerManager>();
                 if (serviceType == typeof(ChannelService)) return _ctx.Get<ChannelService>();
+                if (serviceType == typeof(CommandService)) return _ctx.Get<CommandService>();
                 if (serviceType == typeof(DatabaseService)) return _ctx.Get<DatabaseService>();
                 return null;
             }
