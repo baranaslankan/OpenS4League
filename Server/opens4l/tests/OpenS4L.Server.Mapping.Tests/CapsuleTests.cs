@@ -94,6 +94,22 @@ namespace OpenS4L.Server.Mapping.Tests
         }
 
         [Fact]
+        public void ParseTooltip_setCapsule_rollsOneItemFromWholeList()
+        {
+            // Shaped like a set capsule: the permanent set alone in slot 1, parts in slot 2,
+            // and a 30-day set with no slot at all.
+            var doc = XDocument.Parse(@"<x><item id=""4110069"">
+    <capsule_icon ID_1=""4050124"" ID_2=""1021018"" ID_3=""1031018"" ID_9=""4050123"" ID_16=""1"" />
+    <capsule_slot slot_1=""1"" slot_2=""2"" slot_3=""2"" slot_16=""CAPSULE_RANDOME_ESPERCHIP_CAPSULE"" />
+  </item></x>");
+
+            var capsule = Assert.Single(CapsuleDataParser.ParseTooltip(doc, new Dictionary<string, string>()));
+
+            var group = Assert.Single(capsule.Groups);
+            Assert.Equal(new uint[] { 4050124, 1021018, 1031018, 4050123 }, group.Rewards.Select(x => x.ItemNumber.Id));
+        }
+
+        [Fact]
         public void ParseTooltip_penWithoutText_isSkipped()
         {
             var doc = XDocument.Parse(@"<x><item id=""1""><capsule_icon ID_1=""4040003"" /><capsule_info effect_key_1=""MISSING"" /></item></x>");

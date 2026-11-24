@@ -76,14 +76,17 @@ namespace OpenS4L.Server.Game.Data
                     continue;
 
                 var icons = item.Element("capsule_icon");
-                var slots = item.Element("capsule_slot");
                 var infos = item.Element("capsule_info");
                 var colors = item.Element("color_index");
                 if (icons == null)
                     continue;
 
-                // Entries sharing a slot are alternatives; every slot is rolled once.
-                var groups = new SortedDictionary<string, CapsuleRewardGroup>(StringComparer.Ordinal);
+                // Without a reward table the tooltip's slot numbers can't be trusted as groups: set
+                // capsules list the top prize alone in slot 1 (in the reward tables it is a rare pick
+                // against a coupon) and often leave rewards without a slot. So one item is rolled from
+                // everything listed, and PEN, when listed, is rolled separately.
+                var items = new CapsuleRewardGroup();
+                var pens = new CapsuleRewardGroup();
                 for (var i = 1; i <= 10; ++i)
                 {
                     if (!uint.TryParse((string)icons.Attribute("ID_" + i), out var rewardItem) || rewardItem == 0)
@@ -110,16 +113,14 @@ namespace OpenS4L.Server.Game.Data
                         };
                     }
 
-                    var slot = ((string)slots?.Attribute("slot_" + i) ?? "").Trim();
-                    if (!groups.TryGetValue(slot, out var group))
-                        groups[slot] = group = new CapsuleRewardGroup();
-                    group.Rewards.Add(reward);
+                    (reward.Type == CapsuleRewardType.PEN ? pens : items).Rewards.Add(reward);
                 }
 
+                var groups = new[] { items, pens }.Where(g => g.Rewards.Count > 0).ToList();
                 if (groups.Count > 0)
                     yield return new CapsuleInfo
                     {
-                        ItemNumber = new ItemNumber(number), Source = CapsuleSource.Tooltip, Groups = groups.Values.ToList()
+                        ItemNumber = new ItemNumber(number), Source = CapsuleSource.Tooltip, Groups = groups
                     };
             }
         }
