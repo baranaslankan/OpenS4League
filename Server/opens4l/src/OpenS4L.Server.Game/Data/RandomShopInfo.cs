@@ -60,6 +60,12 @@ namespace OpenS4L.Server.Game.Data
 
         public IList<RandomShopPeriod> Periods { get; set; }
 
+        /// <summary>
+        /// The 2019 EU odds (<see cref="RandomShopOdds.FileName"/>), or null when that file is not in
+        /// the server data folder. When set they replace <see cref="Periods"/> and the uniform prize pick.
+        /// </summary>
+        public RandomShopOdds Odds { get; set; }
+
         public RandomShopInfo()
         {
             Periods = new List<RandomShopPeriod>();
@@ -212,9 +218,13 @@ namespace OpenS4L.Server.Game.Data
         public int Price { get; set; }
         public IList<ShopItem> Items { get; set; }
 
+        /// <summary>What can be rolled for each of <see cref="Items"/> (same order).</summary>
+        public IList<RandomShopEntry> Entries { get; set; }
+
         public RandomShopPackage()
         {
             Items = new List<ShopItem>();
+            Entries = new List<RandomShopEntry>();
         }
 
         public bool CanUse(CharacterGender gender)
@@ -230,6 +240,43 @@ namespace OpenS4L.Server.Game.Data
                 default:
                     return true;
             }
+        }
+    }
+
+    /// <summary>
+    /// One prize of a package with everything the roll picks from. The group names go to the client
+    /// in RandomShopUpdateInfoAck, so the client lists what the server rolls.
+    /// </summary>
+    public class RandomShopEntry
+    {
+        public ShopItem Item { get; set; }
+
+        /// <summary>Relative weight of the item within its package.</summary>
+        public int Weight { get; set; }
+
+        public string PeriodGroup { get; set; }
+        public IList<RandomShopWeighted<RandomShopPeriod>> Periods { get; set; }
+
+        public string EffectGroup { get; set; }
+        public IList<RandomShopWeighted<uint>> Effects { get; set; }
+
+        /// <summary>
+        /// true: the prize gets all effects of its shop effect group (no 2019 odds for it);
+        /// false: one effect is picked from <see cref="Effects"/>.
+        /// </summary>
+        public bool UseShopEffects { get; set; }
+
+        public string ColorGroup { get; set; }
+
+        /// <summary>The colours the client is told about; the roll picks by weight (weight 0 = shown only).</summary>
+        public IList<RandomShopWeighted<byte>> Colors { get; set; }
+
+        public RandomShopEntry()
+        {
+            Weight = 1;
+            Periods = new List<RandomShopWeighted<RandomShopPeriod>>();
+            Effects = new List<RandomShopWeighted<uint>>();
+            Colors = new List<RandomShopWeighted<byte>>();
         }
     }
 }

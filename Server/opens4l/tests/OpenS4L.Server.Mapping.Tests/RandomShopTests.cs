@@ -437,6 +437,400 @@ namespace OpenS4L.Server.Mapping.Tests
             Assert.Equal(9000, _ctx.Get<RandomShopService>().GetGauge(plr.Account.Id));
         }
 
+        #region 2019 odds
+        // Synthetic, shaped like _eu_new_random_shop.xml (2019 EU). 2000006 is in a PEN package and a
+        // coupon package; 2010001 (seeded shooting weapon) and the seeded shirts are not in the lineup.
+        private const string OddsXml = @"<random_shop_info version="""">
+  <package_list>
+    <package id=""1004001"" open=""new"" name_key=""N1004001"" desc_key=""D1004001"" price_type=""pen"" price=""7000"" gender=""all""/>
+    <package id=""2001006"" open=""new"" name_key=""N2001006"" desc_key=""D2001006"" price_type=""pen"" price=""3000"" gender=""man""/>
+    <package id=""4020001"" open=""new"" name_key=""N4020001"" desc_key=""D4020001"" price_type=""coupon"" price=""50"" gender=""man""/>
+    <package id=""bad"" open=""off"" price_type=""pen"" price=""1"" gender=""all""/>
+  </package_list>
+  <period_list>
+    <period group=""Def_WP_Days"" value=""1"" type=""DAYS"" prob=""4000"" grade=""0""/>
+    <period group=""Def_WP_Days"" value=""0"" type=""NONE"" prob=""200"" grade=""15""/>
+    <period group=""Def_CT_Days"" value=""3"" type=""DAYS"" prob=""2500"" grade=""0""/>
+    <period group=""Def_CT_Days"" value=""7"" type=""BOGUS"" prob=""1500"" grade=""0""/>
+  </period_list>
+  <lineup_list>
+    <lineup pid=""1004001"" reward_type=""ITEM"" reward_value=""0"" item_key=""2000006"" color_group=""Dist_1"" effect_group=""Def_Weapon_Melee"" period_group=""Def_WP_Days"" default_color=""0"" prob=""681"" grade=""0""/>
+    <lineup pid=""1004001"" reward_type=""ITEM"" reward_value=""0"" item_key=""2000074"" color_group=""Dist_1"" effect_group=""Def_Weapon_Melee"" period_group=""Def_WP_Days"" default_color=""0"" prob=""192"" grade=""20""/>
+    <lineup pid=""1004001"" reward_type=""ITEM"" reward_value=""0"" item_key=""2010050"" color_group=""Dist_1"" effect_group=""Def_Weapon_Rifle"" period_group=""Def_WP_Days"" default_color=""0"" prob=""205"" grade=""20""/>
+    <lineup pid=""4020001"" reward_type=""ITEM"" reward_value=""0"" item_key=""2000006"" color_group=""Dist_1"" effect_group=""Coupon_None"" period_group=""CP_CAPSULE"" default_color=""0"" prob=""4000"" grade=""0""/>
+    <lineup pid=""2001006"" reward_type=""ITEM"" reward_value=""0"" item_key=""1020001"" color_group=""Unique_2"" effect_group=""Def_Top"" period_group=""Def_CT_Days"" default_color=""0"" prob=""750"" grade=""0""/>
+    <lineup pid=""2001006"" reward_type=""ITEM"" reward_value=""0"" item_key=""1020002"" color_group=""Dist_4"" effect_group=""Def_Top"" period_group=""Def_CT_Days"" default_color=""0"" prob=""208"" grade=""0""/>
+    <lineup pid=""2001006"" reward_type=""ITEM"" reward_value=""0"" item_key=""1020003"" color_group=""Dist_4"" effect_group=""Def_Top"" period_group=""Def_CT_Days"" default_color=""0"" prob=""212"" grade=""0""/>
+    <lineup pid=""2001006"" reward_type=""ITEM"" reward_value=""0"" item_key=""x"" color_group=""Dist_4"" effect_group=""Def_Top"" period_group=""Def_CT_Days"" default_color=""0"" prob=""5"" grade=""0""/>
+  </lineup_list>
+  <effect_list>
+    <effect group=""Def_Weapon_Melee"" id=""1299600001"" prob=""6500"" grade=""0""/>
+    <effect group=""Def_Weapon_Melee"" id=""1299600006"" prob=""2500"" grade=""10""/>
+    <effect group=""Def_Weapon_Melee"" id=""21001"" prob=""1000"" grade=""30""/>
+    <effect group=""Def_Weapon_Rifle"" id=""1299600001"" prob=""6500"" grade=""0""/>
+    <effect group=""Def_Weapon_Rifle"" id=""22001"" prob=""1000"" grade=""30""/>
+    <effect group=""Def_Top"" id=""12002"" prob=""1000"" grade=""30""/>
+    <effect group=""Coupon_None"" id=""0"" prob=""10000"" grade=""0""/>
+    <effect group=""Def_Weapon_Sentry"" id=""nope"" prob=""1"" grade=""0""/>
+  </effect_list>
+  <color_list>
+    <color group=""Dist_1"" color=""0"" prob=""10000"" grade=""0""/>
+    <color group=""Dist_4"" color=""0"" prob=""2500"" grade=""0""/>
+    <color group=""Dist_4"" color=""1"" prob=""2500"" grade=""0""/>
+    <color group=""Dist_4"" color=""2"" prob=""2500"" grade=""0""/>
+    <color group=""Dist_4"" color=""3"" prob=""2500"" grade=""0""/>
+    <color group=""Unique_2"" color=""2"" prob=""10000"" grade=""0""/>
+  </color_list>
+</random_shop_info>";
+
+        private const uint KnownEffectA = 1299600001;
+        private const uint KnownEffectB = 1299600006;
+
+        private static RandomShopOdds ParseOdds()
+        {
+            return RandomShopOdds.Parse(XDocument.Parse(OddsXml));
+        }
+
+        private RandomShopInfo OddsInfo()
+        {
+            GameFixtures.AddEffects(_ctx.GameData, new ItemEffect { Id = KnownEffectA }, new ItemEffect { Id = KnownEffectB });
+            var info = RandomShopInfo.Default;
+            info.Odds = ParseOdds();
+            return info;
+        }
+
+        [Fact]
+        public void Odds_Parse_readsAllSections_skipsBadRows()
+        {
+            var odds = ParseOdds();
+
+            Assert.Equal(3, odds.Packages.Count); // id "bad" skipped
+            Assert.True(odds.Packages[0].IsPen);
+            Assert.False(odds.Packages[2].IsPen);
+            Assert.Equal(7000, odds.Packages[0].Price);
+            Assert.Equal("man", odds.Packages[1].Gender);
+
+            Assert.Equal(7, odds.Lineup.Count); // item_key "x" skipped
+            var first = odds.Lineup[0];
+            Assert.Equal(1004001, first.PackageId);
+            Assert.Equal(2000006u, first.ItemKey);
+            Assert.Equal(("Dist_1", "Def_Weapon_Melee", "Def_WP_Days"), (first.ColorGroup, first.EffectGroup, first.PeriodGroup));
+            Assert.Equal(681, first.Prob);
+            Assert.True(first.IsItem);
+
+            var wp = odds.PeriodGroups["Def_WP_Days"];
+            Assert.Equal(new[] { (ItemPeriodType.Days, (ushort)1, 4000), (ItemPeriodType.None, (ushort)0, 200) },
+                wp.Select(x => (x.Value.PeriodType, x.Value.Period, x.Weight)));
+            Assert.Single(odds.PeriodGroups["Def_CT_Days"]); // BOGUS type skipped
+
+            Assert.Equal(new[] { (KnownEffectA, 6500), (KnownEffectB, 2500), (21001u, 1000) },
+                odds.EffectGroups["Def_Weapon_Melee"].Select(x => (x.Value, x.Weight)));
+            Assert.False(odds.EffectGroups.ContainsKey("Def_Weapon_Sentry")); // id "nope" skipped
+
+            Assert.Equal(new byte[] { 0, 1, 2, 3 }, odds.ColorGroups["Dist_4"].Select(x => x.Value));
+            Assert.Equal(10000, odds.ColorGroups["Unique_2"].Single().Weight);
+        }
+
+        [Fact]
+        public void Odds_GetSlot_lineupItem_usesItsGroupsAndProb_notCouponPackages()
+        {
+            var slot = ParseOdds().GetSlot((ItemNumber)2000006u, RandomShopKind.Weapon);
+
+            Assert.True(slot.InLineup);
+            Assert.Equal(681, slot.Weight); // the coupon package entry (4000, Coupon_None) is ignored
+            Assert.Equal("Def_Weapon_Melee", slot.EffectGroup);
+            Assert.Equal("Def_WP_Days", slot.PeriodGroup);
+            Assert.Equal("Dist_1", slot.ColorGroup);
+        }
+
+        [Fact]
+        public void Odds_GetSlot_unknownItem_derivesGroupsFromSubCategory_andMeanWeight()
+        {
+            var odds = ParseOdds();
+
+            var rifle = odds.GetSlot((ItemNumber)2010001u, RandomShopKind.Weapon);
+            Assert.False(rifle.InLineup);
+            Assert.Equal("Def_Weapon_Rifle", rifle.EffectGroup);
+            Assert.Equal("Def_WP_Days", rifle.PeriodGroup);
+            Assert.Equal("Dist_1", rifle.ColorGroup);
+            Assert.Equal(359, rifle.Weight); // (681 + 192 + 205) / 3, PEN weapon entries only
+
+            var shirt = odds.GetSlot(MaleShirt, RandomShopKind.Costume);
+            Assert.Equal("Def_Top", shirt.EffectGroup);
+            Assert.Equal("Def_CT_Days", shirt.PeriodGroup);
+            Assert.Equal("Dist_4", shirt.ColorGroup); // 2 of 3 shirts
+            Assert.Equal(390, shirt.Weight); // (750 + 208 + 212) / 3
+        }
+
+        [Fact]
+        public void Odds_GetSlot_subCategoryWithoutLineup_fallsBack()
+        {
+            var odds = ParseOdds();
+
+            var sentry = odds.GetSlot((ItemNumber)2040001u, RandomShopKind.Weapon);
+            Assert.Equal("Def_Weapon_Sentry", sentry.EffectGroup);
+            Assert.Equal("Def_WP_Days", sentry.PeriodGroup);
+            Assert.Equal("Dist_1", sentry.ColorGroup);
+
+            var hair = odds.GetSlot(new ItemNumber(ItemCategory.Costume, (byte)CostumeSlot.Hair, 1), RandomShopKind.Costume);
+            Assert.Null(hair.EffectGroup);
+            Assert.Equal("Def_CT_Days", hair.PeriodGroup);
+
+            var empty = new RandomShopOdds().GetSlot((ItemNumber)2000006u, RandomShopKind.Weapon);
+            Assert.Equal(1, empty.Weight);
+            Assert.Equal(RandomShopOdds.DefaultWeaponPeriodGroup, empty.PeriodGroup);
+            Assert.Equal(RandomShopOdds.DefaultCostumePeriodGroup,
+                new RandomShopOdds().GetSlot(MaleShirt, RandomShopKind.Costume).PeriodGroup);
+        }
+
+        [Fact]
+        public void Pick_followsWeights_seeded()
+        {
+            var values = new List<RandomShopWeighted<string>>
+            {
+                new RandomShopWeighted<string>("never", 0),
+                new RandomShopWeighted<string>("three", 3),
+                new RandomShopWeighted<string>("one", 1),
+                new RandomShopWeighted<string>("negative", -5)
+            };
+            var random = new Random(42);
+            var counts = new Dictionary<string, int>();
+            for (var i = 0; i < 4000; ++i)
+            {
+                var value = RandomShopOdds.Pick(values, random).Value;
+                counts[value] = counts.GetValueOrDefault(value) + 1;
+            }
+
+            Assert.Equal(new[] { "one", "three" }, counts.Keys.OrderBy(x => x));
+            Assert.InRange(counts["three"], 2850, 3150); // expected 3000
+
+            Assert.Null(RandomShopOdds.Pick(new List<RandomShopWeighted<string>> { new RandomShopWeighted<string>("x", 0) }, random));
+            Assert.Null(RandomShopOdds.Pick((IList<RandomShopWeighted<string>>)null, random));
+        }
+
+        [Fact]
+        public void BuildEntry_withOdds_usesKnownEffectsItemColorsAndPeriodGroup()
+        {
+            var info = OddsInfo();
+            var packages = RandomShopService.BuildPackages(_ctx.GameData.ShopItems.Values, info, _ctx.GameData.Effects);
+
+            var melee = Assert.Single(Assert.Single(packages, x => x.Id == MeleePackage).Entries);
+            Assert.Equal(681, melee.Weight);
+            Assert.Equal("Def_Weapon_Melee", melee.EffectGroup);
+            Assert.False(melee.UseShopEffects);
+            // 21001 is not in effect_list -> dropped
+            Assert.Equal(new[] { (KnownEffectA, 6500), (KnownEffectB, 2500) }, melee.Effects.Select(x => (x.Value, x.Weight)));
+            Assert.Equal("Def_WP_Days", melee.PeriodGroup);
+            Assert.Equal(2, melee.Periods.Count);
+            Assert.Equal("Dist_1", melee.ColorGroup);
+
+            var shirt = Assert.Single(Assert.Single(packages, x => x.Id == MaleShirtPackage).Entries);
+            Assert.Equal(390, shirt.Weight);
+            Assert.Equal("Def_CT_Days", shirt.PeriodGroup);
+            // Def_Top has no known effect -> the shop item's own effects
+            Assert.True(shirt.UseShopEffects);
+            Assert.Equal("e20", shirt.EffectGroup);
+            // shirt has colour 0 only -> Dist_4 cut down to colour 0
+            Assert.Equal("Dist_4@0", shirt.ColorGroup);
+            Assert.Equal(new byte[] { 0 }, shirt.Colors.Select(x => x.Value));
+        }
+
+        [Fact]
+        public void BuildEntry_withoutOdds_keepsUniformX7Behaviour()
+        {
+            var info = RandomShopInfo.Default;
+            var entry = RandomShopService.BuildEntry(_ctx.GameData.GetShopItem((ItemNumber)2000006u), RandomShopKind.Weapon, info);
+
+            Assert.Equal(1, entry.Weight);
+            Assert.True(entry.UseShopEffects);
+            Assert.Equal(RandomShopService.PeriodGroup, entry.PeriodGroup);
+            Assert.Equal(info.Periods.Select(x => x.WeaponWeight), entry.Periods.Select(x => x.Weight));
+            Assert.Equal("c0", entry.ColorGroup);
+            Assert.Equal(new[] { ((byte)0, 1) }, entry.Colors.Select(x => (x.Value, x.Weight)));
+        }
+
+        [Fact]
+        public void RollPrize_withOdds_followsPeriodColorAndEffectWeights_seeded()
+        {
+            var info = OddsInfo();
+            var shirt = _ctx.GameData.GetShopItem(MaleShirt);
+            shirt.ColorGroup = 3;
+            try
+            {
+                var packages = RandomShopService.BuildPackages(_ctx.GameData.ShopItems.Values, info, _ctx.GameData.Effects);
+                var melee = Assert.Single(packages, x => x.Id == MeleePackage);
+                var shirts = Assert.Single(packages, x => x.Id == MaleShirtPackage);
+                Assert.Equal("Dist_4", shirts.Entries[0].ColorGroup); // all four colours fit
+
+                var random = new Random(7);
+                var days = 0;
+                var effectA = 0;
+                const int rolls = 4000;
+                for (var i = 0; i < rolls; ++i)
+                {
+                    var prize = RandomShopService.RollPrize(melee, random);
+                    Assert.Equal(2000006u, prize.Item.ItemNumber.Id);
+                    Assert.Equal(0, prize.Color);
+                    var effect = Assert.Single(prize.Effects);
+                    Assert.Contains(effect, new[] { KnownEffectA, KnownEffectB });
+                    if (effect == KnownEffectA)
+                        ++effectA;
+                    if (prize.PeriodType == ItemPeriodType.Days)
+                    {
+                        Assert.Equal(1, prize.Period);
+                        ++days;
+                    }
+                    else
+                    {
+                        Assert.Equal(ItemPeriodType.None, prize.PeriodType);
+                    }
+                }
+
+                // 4000 / 4200 days (3810 expected), 6500 / 9000 effect A (2889 expected)
+                Assert.InRange(days, 3730, 3890);
+                Assert.InRange(effectA, 2730, 3050);
+
+                var colors = new HashSet<byte>();
+                for (var i = 0; i < 200; ++i)
+                {
+                    var prize = RandomShopService.RollPrize(shirts, random);
+                    colors.Add(prize.Color);
+                    Assert.Null(prize.Effects); // shop effects
+                    Assert.Equal(ItemPeriodType.Days, prize.PeriodType);
+                    Assert.Equal(3, prize.Period);
+                }
+                Assert.Equal(new byte[] { 0, 1, 2, 3 }, colors.OrderBy(x => x));
+            }
+            finally
+            {
+                shirt.ColorGroup = 0;
+            }
+        }
+
+        [Fact]
+        public void RollPrize_followsItemWeights_seeded()
+        {
+            var package = new RandomShopPackage
+            {
+                Entries = new List<RandomShopEntry>
+                {
+                    new RandomShopEntry { Item = _ctx.GameData.GetShopItem((ItemNumber)2000006u), Weight = 681 },
+                    new RandomShopEntry { Item = _ctx.GameData.GetShopItem((ItemNumber)2010001u), Weight = 192 }
+                }
+            };
+            var random = new Random(3);
+            var common = 0;
+            for (var i = 0; i < 8730; ++i)
+            {
+                if (RandomShopService.RollPrize(package, random).Item.ItemNumber.Id == 2000006u)
+                    ++common;
+            }
+
+            Assert.InRange(common, 6650, 6970); // expected 6810
+        }
+
+        [Fact]
+        public void BuildClientData_withOdds_describesTheRolledGroups()
+        {
+            var info = OddsInfo();
+            var packages = RandomShopService.BuildPackages(_ctx.GameData.ShopItems.Values, info, _ctx.GameData.Effects);
+
+            var data = RandomShopService.BuildClientData(packages, info);
+
+            using (var r = new BinaryReader(new MemoryStream(data)))
+            {
+                var packageCount = r.ReadInt32();
+                for (var i = 0; i < packageCount; ++i)
+                {
+                    r.ReadInt32();
+                    for (var j = 0; j < 5; ++j)
+                        r.ReadProudString();
+                    r.ReadInt32();
+                    r.ReadProudString();
+                }
+
+                var effects = ReadGroupSection(r, () => r.ReadUInt32());
+                Assert.Equal(new[] { KnownEffectA, KnownEffectB }, effects.Where(x => x.group == "Def_Weapon_Melee").Select(x => x.value));
+                Assert.Contains(("e20", 1u), effects); // shirt keeps its shop effect group
+
+                var colors = ReadGroupSection(r, () => r.ReadByte());
+                Assert.Contains(("Dist_1", (byte)0), colors);
+                Assert.Contains(("Dist_4@0", (byte)0), colors);
+                Assert.Equal(colors.Count, colors.Distinct().Count());
+
+                var lineupCount = r.ReadInt32();
+                var lineup = new List<(int pid, int item, string color, string effect, string period)>();
+                for (var i = 0; i < lineupCount; ++i)
+                {
+                    Assert.Equal(0, r.ReadInt32());
+                    Assert.Equal(0, r.ReadByte());
+                    var pid = r.ReadInt32();
+                    Assert.Equal("item", r.ReadProudString());
+                    Assert.Equal(1, r.ReadInt32());
+                    var item = r.ReadInt32();
+                    var color = r.ReadProudString();
+                    var effect = r.ReadProudString();
+                    var period = r.ReadProudString();
+                    lineup.Add((pid, item, color, effect, period));
+                    Assert.Equal(0, r.ReadInt32());
+                }
+                Assert.Contains((MeleePackage, 2000006, "Dist_1", "Def_Weapon_Melee", "Def_WP_Days"), lineup);
+                Assert.Contains((MaleShirtPackage, (int)MaleShirt.Id, "Dist_4@0", "e20", "Def_CT_Days"), lineup);
+
+                var periods = ReadGroupSection(r, () => (type: r.ReadInt32(), value: r.ReadInt32()));
+                Assert.Equal(new[] { ((int)ItemPeriodType.Days, 1), ((int)ItemPeriodType.None, 0) },
+                    periods.Where(x => x.group == "Def_WP_Days").Select(x => (x.value.type, x.value.value)));
+                Assert.Equal(new[] { ((int)ItemPeriodType.Days, 3) },
+                    periods.Where(x => x.group == "Def_CT_Days").Select(x => (x.value.type, x.value.value)));
+                Assert.DoesNotContain(periods, x => x.group == RandomShopService.PeriodGroup);
+
+                // every group the lineup names is in its section
+                Assert.All(lineup, x =>
+                {
+                    Assert.Contains(colors, c => c.group == x.color);
+                    Assert.Contains(effects, e => e.group == x.effect);
+                    Assert.Contains(periods, p => p.group == x.period);
+                });
+                Assert.Equal(r.BaseStream.Length, r.BaseStream.Position);
+            }
+        }
+
+        [Fact]
+        public async Task Roll_withOdds_grantsOnePickedEffect()
+        {
+            _ctx.GameData.RandomShop.Odds = OddsInfo().Odds;
+            var (plr, channel) = await LoginAsync(9409);
+            plr.PEN = 3000;
+
+            await Roll(plr, MeleePackage);
+
+            var ack = Messages(channel).OfType<RandomShopRollingStartAckMessage>().Last();
+            Assert.Equal(RandomShopService.ResultSuccess, ack.Unk1);
+            var prize = Assert.Single(ack.Items);
+            Assert.Contains(prize.EffectGroupId, new[] { KnownEffectA, KnownEffectB });
+            var item = FindByShopItemId(plr, prize.ShopItemId);
+            Assert.Equal(new[] { prize.EffectGroupId }, item.Effects.ToArray());
+            // fixture shop only has a permanent price -> rolled day periods fall back to it
+            Assert.Equal(ItemPeriodType.None, prize.PeriodType);
+            Assert.Equal(0u, plr.PEN);
+        }
+
+        private static List<(string group, T value)> ReadGroupSection<T>(BinaryReader r, Func<T> readValue)
+        {
+            var count = r.ReadInt32();
+            var result = new List<(string group, T value)>();
+            for (var i = 0; i < count; ++i)
+            {
+                Assert.Equal(0, r.ReadInt32());
+                Assert.Equal(0, r.ReadByte());
+                var group = r.ReadProudString();
+                result.Add((group, readValue()));
+            }
+
+            return result;
+        }
+        #endregion
+
         // ShopItemId is 32-bit on the wire; IdGen item ids are 64-bit, the DTO carries the low half
         private static PlayerItem FindByShopItemId(Player plr, uint shopItemId)
         {
