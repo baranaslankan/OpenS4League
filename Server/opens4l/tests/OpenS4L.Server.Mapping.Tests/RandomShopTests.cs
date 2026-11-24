@@ -612,7 +612,7 @@ namespace OpenS4L.Server.Mapping.Tests
         public void BuildEntry_withOdds_usesKnownEffectsItemColorsAndPeriodGroup()
         {
             var info = OddsInfo();
-            var packages = RandomShopService.BuildPackages(_ctx.GameData.ShopItems.Values, info, _ctx.GameData.Effects);
+            var packages = RandomShopService.BuildPackages(_ctx.GameData.ShopItems.Values, info, _ctx.GameData.IsKnownEffect);
 
             var melee = Assert.Single(Assert.Single(packages, x => x.Id == MeleePackage).Entries);
             Assert.Equal(681, melee.Weight);
@@ -657,7 +657,7 @@ namespace OpenS4L.Server.Mapping.Tests
             shirt.ColorGroup = 3;
             try
             {
-                var packages = RandomShopService.BuildPackages(_ctx.GameData.ShopItems.Values, info, _ctx.GameData.Effects);
+                var packages = RandomShopService.BuildPackages(_ctx.GameData.ShopItems.Values, info, _ctx.GameData.IsKnownEffect);
                 var melee = Assert.Single(packages, x => x.Id == MeleePackage);
                 var shirts = Assert.Single(packages, x => x.Id == MaleShirtPackage);
                 Assert.Equal("Dist_4", shirts.Entries[0].ColorGroup); // all four colours fit
@@ -733,7 +733,7 @@ namespace OpenS4L.Server.Mapping.Tests
         public void BuildClientData_withOdds_describesTheRolledGroups()
         {
             var info = OddsInfo();
-            var packages = RandomShopService.BuildPackages(_ctx.GameData.ShopItems.Values, info, _ctx.GameData.Effects);
+            var packages = RandomShopService.BuildPackages(_ctx.GameData.ShopItems.Values, info, _ctx.GameData.IsKnownEffect);
 
             var data = RandomShopService.BuildClientData(packages, info);
 

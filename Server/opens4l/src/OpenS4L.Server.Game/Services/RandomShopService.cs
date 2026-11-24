@@ -249,15 +249,15 @@ namespace OpenS4L.Server.Game.Services
         /// <summary>
         /// Builds the packages from the shop: weapons by sub category, costumes by gender and slot.
         /// Only items with an enabled PEN price are included; empty packages are left out.
-        /// <paramref name="knownEffects"/> (effect_list.x7) limits the 2019 effects to the ones the
+        /// <paramref name="isKnownEffect"/> (effect_list.x7 effects and effect_match_list.x7 groups) limits the 2019 effects to the ones the
         /// server knows; null accepts every effect.
         /// </summary>
         public static IReadOnlyList<RandomShopPackage> BuildPackages(IEnumerable<ShopItem> shopItems, RandomShopInfo info,
-            IReadOnlyDictionary<uint, ItemEffect> knownEffects = null)
+            Func<uint, bool> isKnownEffect = null)
         {
             var packages = BuildPackageItems(shopItems, info);
             foreach (var package in packages)
-                package.Entries = package.Items.Select(x => BuildEntry(x, package.Kind, info, knownEffects)).ToList();
+                package.Entries = package.Items.Select(x => BuildEntry(x, package.Kind, info, isKnownEffect)).ToList();
             return packages;
         }
 
@@ -269,14 +269,14 @@ namespace OpenS4L.Server.Game.Services
         /// falls back to that behaviour on its own when the group is missing or nothing of it is left:
         /// <list type="bullet">
         /// <item>period: the group's entries with prob &gt; 0</item>
-        /// <item>effect: one effect by prob, limited to effects in <paramref name="knownEffects"/></item>
+        /// <item>effect: one effect by prob, limited to effects <paramref name="isKnownEffect"/> accepts</item>
         /// <item>colour: by prob, limited to the item's colours (0..ShopItem.ColorGroup); a group cut
         /// down that way gets its own name ("Dist_4@2") so the client data stays exact</item>
         /// <item>weight: the 2019 prob of the item, or the derived one</item>
         /// </list>
         /// </summary>
         public static RandomShopEntry BuildEntry(ShopItem item, RandomShopKind kind, RandomShopInfo info,
-            IReadOnlyDictionary<uint, ItemEffect> knownEffects = null)
+            Func<uint, bool> isKnownEffect = null)
         {
             var shopInfo = item.ItemInfos.First(IsUsable);
             var colors = Math.Max(0, item.ColorGroup);
@@ -314,7 +314,7 @@ namespace OpenS4L.Server.Game.Services
             if (slot.EffectGroup != null && odds.EffectGroups.TryGetValue(slot.EffectGroup, out var effects))
             {
                 var usable = effects
-                    .Where(x => x.Weight > 0 && x.Value != 0 && (knownEffects == null || knownEffects.ContainsKey(x.Value)))
+                    .Where(x => x.Weight > 0 && x.Value != 0 && (isKnownEffect == null || isKnownEffect(x.Value)))
                     .ToList();
                 if (usable.Count > 0)
                 {
@@ -509,7 +509,7 @@ namespace OpenS4L.Server.Game.Services
                     ReferenceEquals(_cachedEffects, effects))
                     return;
 
-                var packages = BuildPackages(shopItems.Values, info, effects);
+                var packages = BuildPackages(shopItems.Values, info, _gameDataService.IsKnownEffect);
                 var data = BuildClientData(packages, info);
                 string version;
                 using (var sha = SHA256.Create())
