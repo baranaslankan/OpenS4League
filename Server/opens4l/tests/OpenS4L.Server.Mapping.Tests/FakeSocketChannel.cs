@@ -24,6 +24,9 @@ namespace OpenS4L.Server.Mapping.Tests
         /// <summary>Everything passed to WriteAndFlushAsync (raw SendContext objects).</summary>
         public IReadOnlyList<object> Outbound => _outbound;
 
+        /// <summary>Forgets the messages sent so far.</summary>
+        public void ClearOutbound() => _outbound.Clear();
+
         /// <summary>The session-facing channel is always connected + writable.</summary>
         public bool Active => true;
         public bool Open => true;
