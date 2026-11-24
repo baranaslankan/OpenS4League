@@ -137,6 +137,8 @@ services:
       DB_ROOT_PASSWORD: ${POSTGRES_PASSWORD:-1234}
       ADMIN_USER: ${ADMIN_USER:-admin}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
+      # Day periods stay off until the server sends real expiry dates (items would look expired).
+      SHOP_DAY_PERIODS: ${SHOP_DAY_PERIODS:-0}
     volumes:
       - opens4l-clientdata:/data:ro
     depends_on:
