@@ -763,6 +763,8 @@ namespace OpenS4L.Server.Mapping.Tests
             var ack = channel.Outbound.Select(o => o.GetType().GetProperty("Message")?.GetValue(o))
                 .OfType<ItemEquipBoostItemInfoAckMessage>().Last();
             Assert.Equal(new[] { booster.Id }, ack.Items);
+            Assert.Contains(channel.Outbound.Select(o => o.GetType().GetProperty("Message")?.GetValue(o)).OfType<ItemUseItemAckMessage>(),
+                m => m.ItemId == booster.Id);
         }
 
         private async Task<(Player, FakeSocketChannel)> LoginWithCapsuleAsync(uint accountId, bool rewardInShop = true,

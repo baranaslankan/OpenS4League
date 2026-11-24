@@ -106,6 +106,8 @@ namespace OpenS4L.Server.Game.Handlers
                 }
 
                 _logger.Information("Boost {Action} Item={ItemNumber}", message.Action, item.ItemNumber);
+                // The client waits ("Requesting...") for the same ack a costume equip gets.
+                session.Send(new ItemUseItemAckMessage(message.CharacterSlot, message.EquipSlot, item.Id, message.Action));
                 CapsuleOpener.SendBoosts(plr);
                 return true;
             }
