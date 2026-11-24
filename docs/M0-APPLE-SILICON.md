@@ -112,3 +112,7 @@ make -C Server/Docker loadbot SCENARIO=single-channel BOTS=10 USERPREFIX=bot STA
 `.github/workflows/server-ci.yml`: build + test on `ubuntu-latest` (x64, full suite) and
 `macos-latest` (ARM64, `FullyQualifiedName!~PostgresTests`, because GitHub's macOS runners have
 no Docker). The 7 excluded tests run on the ubuntu job and locally.
+
+First run on the fork (commit `d3ef582`, run 45403827379): **success**
+- ubuntu-x64 (`uname -m` x86_64): build 0 errors; tests 316 passed / 0 failed / 0 skipped
+- macos-arm64 (`uname -m` arm64): build 0 errors; tests 309 passed / 0 failed / 0 skipped
