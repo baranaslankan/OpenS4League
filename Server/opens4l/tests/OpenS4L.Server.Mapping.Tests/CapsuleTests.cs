@@ -694,6 +694,17 @@ namespace OpenS4L.Server.Mapping.Tests
             Assert.Empty(box.Groups[0].Rewards[0].Effects);
         }
 
+        [Fact]
+        public void ApplySetGrade_setWhosePartsSayTimed_isNotPermanent()
+        {
+            var box = SetBox(4050001, 1030073);
+            box.Groups[0].Rewards[0].Options.Add(new CapsuleRewardOption { PeriodType = ItemPeriodType.Days, Period = 30 });
+
+            CapsuleDataParser.ApplySetGrade(box, "Striker Set");
+
+            Assert.Empty(box.Groups[0].Rewards[0].Effects);
+        }
+
         private static readonly ItemNumber FullBooster = new ItemNumber(5040006u);
 
         private PlayerItem GiveBooster(Player plr, int id)

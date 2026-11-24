@@ -503,7 +503,10 @@ namespace OpenS4L.Server.Game.Data
             if (capsule.ItemNumber.Id / 10000 != 405 || string.IsNullOrEmpty(boxName))
                 return;
 
-            var permanent = !TryParseBoxPeriod(boxName, out _, out _);
+            // Permanent only when neither the box name nor its parts' tooltip text give a period
+            // (e.g. "Striker Set" has no period in its name, but its parts say "(30Day)").
+            var permanent = !TryParseBoxPeriod(boxName, out _, out _) && !capsule.Groups.SelectMany(g => g.Rewards)
+                .SelectMany(r => r.Options).Any(o => o.PeriodType == ItemPeriodType.Days || o.PeriodType == ItemPeriodType.Hours);
             foreach (var reward in capsule.Groups.SelectMany(g => g.Rewards))
             {
                 if (reward.Type != CapsuleRewardType.Item || reward.ItemNumber.Category != ItemCategory.Costume)
