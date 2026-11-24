@@ -10,14 +10,18 @@ using ProudNet;
 
 namespace OpenS4L.Server.Game.Handlers
 {
-    internal class ShopHandler : IHandle<ItemBuyItemReqMessage>, IHandle<RandomShopUpdateCheckReqMessage>
+    internal class ShopHandler : IHandle<ItemBuyItemReqMessage>, IHandle<RandomShopUpdateCheckReqMessage>,
+        IHandle<RandomShopRollingStartReqMessage>
     {
         private readonly GameDataService _gameDataService;
+        private readonly RandomShopService _randomShopService;
         private readonly ILogger _logger;
 
-        public ShopHandler(GameDataService gameDataService, ILogger<ShopHandler> logger)
+        public ShopHandler(GameDataService gameDataService, RandomShopService randomShopService,
+            ILogger<ShopHandler> logger)
         {
             _gameDataService = gameDataService;
+            _randomShopService = randomShopService;
             _logger = logger;
         }
 
@@ -162,18 +166,52 @@ namespace OpenS4L.Server.Game.Handlers
             return true;
         }
 
-        // Sent by the client right after login to check for a "random shop" (rotating
-        // gacha-style shop) update. Previously unhandled, which left the client waiting
-        // indefinitely for an ack - a likely contributor to the client giving up and
-        // closing shortly after login. RandomShopUpdateCheckAckMessage.Unk is
-        // unreverse-engineered (likely a version/checksum string the client compares
-        // against a local cache); an empty string is an unverified best guess at "no
-        // update pending", not a confirmed-correct payload.
+        // Fumbi random shop data check. Unk1 is the version of the client's cached shop data
+        // (./shop/_rc_new_random_shop). The client compares the ack's version with its cache: equal
+        // means "cache is current", otherwise it waits for RandomShopUpdateInfoAck with all five data
+        // sections (Unk1 = 0x1F), LZO-compressed like the NewShop data. Unk2 is not used.
         [Firewall(typeof(MustBeLoggedIn))]
         public Task<bool> OnHandle(MessageContext context, RandomShopUpdateCheckReqMessage message)
         {
             var session = context.GetSession<Session>();
-            session.Send(new RandomShopUpdateCheckAckMessage { Unk = string.Empty });
+            var data = _randomShopService.GetClientData();
+            session.Send(new RandomShopUpdateCheckAckMessage { Unk = data.Version });
+
+            if (message.Unk1 != data.Version)
+            {
+                session.Send(new RandomShopUpdateInfoAckMessage
+                {
+                    Unk1 = RandomShopService.AllSections,
+                    Unk2 = data.Data,
+                    Unk3 = data.CompressedLength,
+                    Unk4 = data.DecompressedLength,
+                    Unk5 = data.Version
+                });
+            }
+
+            return Task.FromResult(true);
+        }
+
+        // Fumbi random shop roll. Unk is the package id (a "machine" from the update data).
+        [Inline]
+        [Firewall(typeof(MustBeLoggedIn))]
+        public Task<bool> OnHandle(MessageContext context, RandomShopRollingStartReqMessage message)
+        {
+            var session = context.GetSession<Session>();
+            var plr = session.Player;
+
+            var result = _randomShopService.Roll(plr, message.Unk, Random.Shared);
+            if (result.Result != RandomShopService.ResultSuccess)
+            {
+                plr.AddContextToLogger(_logger).Warning("Random shop roll failed package={PackageId} result={Result}",
+                    message.Unk, result.Result);
+            }
+            else
+            {
+                plr.SendMoneyUpdate();
+            }
+
+            session.Send(new RandomShopRollingStartAckMessage { Unk1 = result.Result, Items = result.Items });
             return Task.FromResult(true);
         }
     }

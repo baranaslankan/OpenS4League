@@ -76,6 +76,7 @@ namespace OpenS4L.Server.Game.Services
             LoadDefaultItems();
             LoadGameTempos();
             LoadEquipLimits();
+            LoadRandomShop();
             await LoadShop();
             await LoadLevelRewards();
         }

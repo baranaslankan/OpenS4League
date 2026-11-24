@@ -92,6 +92,7 @@ namespace OpenS4L.Server.Mapping.Tests
             services.AddSingleton<ProudNet.Hosting.Services.ISchedulerService>(x => x.GetRequiredService<ManualSchedulerService>());
             services.AddSingleton<IdGeneratorService>();
             services.AddSingleton<GameMapper>();
+            services.AddSingleton<RandomShopService>();
             services.AddSingleton(GameData);
             services.AddSingleton<GameRuleResolver>();
             services.AddTransient<GameRuleStateMachine>();
