@@ -103,6 +103,19 @@ namespace OpenS4L.Server.Game.Services
             return mapDto.id > byte.MaxValue;
         }
 
+        private void LoadEffectMatches()
+        {
+            var path = Path.Combine(_resourcePath, "xml", "effect_match_list.x7");
+            if (!File.Exists(path))
+                return;
+
+            EffectMatches = XDocument.Load(path).Descendants("match_key")
+                .Select(x => uint.TryParse((string)x.Attribute("id"), out var id) ? id : 0)
+                .Where(x => x != 0)
+                .ToImmutableHashSet();
+            _logger.Information("Loaded {Count} effect groups", EffectMatches.Count);
+        }
+
         public void LoadEffects()
         {
             _logger.Information("Loading effects...");
@@ -110,6 +123,7 @@ namespace OpenS4L.Server.Game.Services
             var stringTable = Deserialize<StringTableDto>("language/xml/item_effect_string_table.x7");
             Effects = Transform().ToImmutableDictionary(x => x.Id, x => x);
             _logger.Information("Loaded {Count} effects", Effects.Count);
+            LoadEffectMatches();
 
             IEnumerable<ItemEffect> Transform()
             {

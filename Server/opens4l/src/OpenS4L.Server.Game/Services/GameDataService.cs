@@ -21,6 +21,15 @@ namespace OpenS4L.Server.Game.Services
         public ImmutableDictionary<int, LevelInfo> Levels { get; private set; }
         public ImmutableArray<MapInfo> Maps { get; private set; }
         public ImmutableDictionary<uint, ItemEffect> Effects { get; private set; }
+
+        /// <summary>
+        /// Effect group ids of the client's effect_match_list.x7 (e.g. 12002 "Attack+12%, EXP+5%").
+        /// Items may carry them in place of plain effect ids; the client shows the group.
+        /// </summary>
+        public ImmutableHashSet<uint> EffectMatches { get; private set; } = ImmutableHashSet<uint>.Empty;
+
+        /// <summary>True for an effect id the client knows: a plain effect or an effect group.</summary>
+        public bool IsKnownEffect(uint id) => Effects.ContainsKey(id) || EffectMatches.Contains(id);
         public ImmutableDictionary<ItemNumber, ItemInfo> Items { get; private set; }
         public ImmutableArray<DefaultItem> DefaultItems { get; private set; }
         public ImmutableDictionary<string, GameTempo> GameTempos { get; private set; }

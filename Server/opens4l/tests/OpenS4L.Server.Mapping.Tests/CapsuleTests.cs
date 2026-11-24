@@ -265,9 +265,21 @@ namespace OpenS4L.Server.Mapping.Tests
         {
             var (plr, _) = await LoginWithCapsuleAsync(9309, withPen: false);
 
-            var item = plr.Inventory.CreateFromShop(Gun, effects: new uint[] { 12002 });
+            var item = plr.Inventory.CreateFromShop(Gun, effects: new uint[] { 99999 });
 
             Assert.Equal(new uint[] { 1 }, item.Effects.ToArray());
+        }
+
+        [Fact]
+        public async Task CreateFromShop_effectGroupReward_isKept()
+        {
+            var (plr, _) = await LoginWithCapsuleAsync(9311, withPen: false);
+            typeof(GameDataService).GetProperty(nameof(GameDataService.EffectMatches))
+                .SetValue(_ctx.GameData, ImmutableHashSet.Create<uint>(12002));
+
+            var item = plr.Inventory.CreateFromShop(Gun, effects: new uint[] { 12002 });
+
+            Assert.Equal(new uint[] { 12002 }, item.Effects.ToArray());
         }
 
         [Fact]

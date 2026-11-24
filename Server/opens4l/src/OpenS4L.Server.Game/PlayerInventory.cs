@@ -289,8 +289,8 @@ namespace OpenS4L.Server.Game
             if (choice.info == null)
                 return null;
 
-            // Reward tables sometimes carry ids that are not effects (e.g. 12002); those fall back to the shop's.
-            effects = effects?.Where(x => _gameDataService.Effects.ContainsKey(x)).ToArray();
+            // Ids the client doesn't know (neither an effect nor an effect group) fall back to the shop's.
+            effects = effects?.Where(x => _gameDataService.IsKnownEffect(x)).ToArray();
             if (effects == null || effects.Length == 0)
                 effects = choice.info.EffectGroup?.Effects.Select(x => x.Effect).Where(x => x != 0).ToArray()
                           ?? Array.Empty<uint>();
