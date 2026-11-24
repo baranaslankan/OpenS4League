@@ -33,14 +33,18 @@ namespace OpenS4L.Server.Game
             var isPermanent = (Func<CapsuleRewardInfo, bool>)(r => IsPermanent(r, gameData));
             var boosted = false;
             var rolled = new List<(CapsuleRewardInfo Reward, float Boost)>();
-            foreach (var group in info.Groups)
+            // Only rewards the shop knows can be given; they are left out before rolling, so an
+            // unknown reward neither wastes the roll nor the booster.
+            var groups = info.Groups.Select(g => new CapsuleRewardGroup
+            {
+                Rewards = g.Rewards.Where(r => r.Type == CapsuleRewardType.PEN || gameData.GetShopItem(r.ItemNumber) != null).ToList()
+            });
+            foreach (var group in groups)
             {
                 var factor = !boosted && boost > 0 && group.Rewards.Any(isPermanent) ? boost : 0f;
                 boosted |= factor > 0;
                 var reward = factor > 0 ? Roll(group, random, r => isPermanent(r) ? factor : 1f) : Roll(group, random);
                 if (reward == null)
-                    continue;
-                if (reward.Type != CapsuleRewardType.PEN && gameData.GetShopItem(reward.ItemNumber) == null)
                     continue;
                 rolled.Add((reward, factor));
             }

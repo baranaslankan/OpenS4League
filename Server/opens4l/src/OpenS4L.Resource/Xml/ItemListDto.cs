@@ -117,6 +117,10 @@ namespace OpenS4L.Resource.xml
         [XmlAttribute]
         public int parent_number { get; set; }
 
+        /// <summary>Whether parent_number is in the file (0 is a valid parent, e.g. 2000000).</summary>
+        [XmlIgnore]
+        public bool parent_numberSpecified { get; set; }
+
         [XmlAttribute]
         public int chaser_tag { get; set; }
     }

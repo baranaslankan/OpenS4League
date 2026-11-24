@@ -738,6 +738,25 @@ namespace OpenS4L.Server.Mapping.Tests
         }
 
         [Fact]
+        public async Task Open_withFullBooster_skipsAPermanentRewardTheShopDoesNotHave()
+        {
+            var (plr, _) = await LoginWithCapsuleAsync(9320, withPen: false);
+            var gun = SeedTimedOrPermanentGun(42);
+            // A permanent reward that is not in the shop, next to the gun that can come permanent.
+            _ctx.GameData.Capsules[Capsule].Groups[0].Rewards.Insert(0, new CapsuleRewardInfo
+            {
+                Type = CapsuleRewardType.Item, ItemNumber = new ItemNumber(2000099u), PeriodType = ItemPeriodType.None, Rate = 0
+            });
+            var booster = GiveBooster(plr, 43);
+            plr.EquippedBoosts.Add(booster.Id);
+            var capsule = plr.Inventory.First(x => x.ItemNumber == Capsule);
+
+            var reward = Assert.Single(CapsuleOpener.Open(plr, capsule, _ctx.GameData, new Random(3)));
+
+            Assert.Equal((gun, ItemPeriodType.None), (reward.ItemNumber, reward.PeriodType));
+        }
+
+        [Fact]
         public async Task Open_withBoosterNotSwitchedOn_rollsNormallyAndKeepsIt()
         {
             var (plr, _) = await LoginWithCapsuleAsync(9318, withPen: false);

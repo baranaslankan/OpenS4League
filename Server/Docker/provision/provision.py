@@ -298,7 +298,17 @@ def _load_weapon_keys():
     shop on it keeps players from buying/equipping weapons that will never render.
     """
     root = ET.parse(WEAPON_X7).getroot()
-    return {int(w.get("item_key")) for w in root.findall("weapon") if w.get("item_key")}
+    keys = {int(w.get("item_key")) for w in root.findall("weapon") if w.get("item_key")}
+    # Weapon skins (item.x7 etc parent_number, e.g. Virtual Shield = Counter Sword 2000002) have no
+    # entry of their own: the client and GameDataService use the parent weapon's data.
+    for it in ET.parse(ITEM_X7).getroot().iter("item"):
+        etc, key = it.find("etc"), it.get("item_key") or ""
+        if etc is None or not key.isdigit() or not (etc.get("parent_number") or "").isdigit():
+            continue
+        item_id = int(key)
+        if item_id // 1000000 == 2 and item_id - item_id % 10000 + int(etc.get("parent_number")) in keys:
+            keys.add(item_id)
+    return keys
 
 
 def _load_tab_data():

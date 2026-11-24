@@ -201,7 +201,7 @@ namespace OpenS4L.Server.Game.Services
                     switch (id.Category)
                     {
                         case ItemCategory.Weapon:
-                            item = LoadWeapon(id);
+                            item = LoadWeapon(id, itemDto.etc);
                             break;
 
                         case ItemCategory.Skill:
@@ -303,9 +303,16 @@ namespace OpenS4L.Server.Game.Services
                 return item;
             }
 
-            ItemInfo LoadWeapon(ItemNumber id)
+            ItemInfo LoadWeapon(ItemNumber id, ItemListItemEtcDto etc)
             {
                 var weaponDto = weaponsDto.weapon.FirstOrDefault(x => x.item_key == id);
+                // Weapon skins (e.g. Virtual Shield) have no entry: they use their parent weapon's.
+                if (weaponDto == null && etc?.parent_numberSpecified == true)
+                {
+                    var parent = new ItemNumber(id.Category, id.SubCategory, (ushort)etc.parent_number);
+                    weaponDto = weaponsDto.weapon.FirstOrDefault(x => x.item_key == parent);
+                }
+
                 if (weaponDto == null)
                 {
                     _logger.Warning("Missing weapon for item {id}", id);
