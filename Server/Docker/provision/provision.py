@@ -14,6 +14,9 @@ Env:
   ADMIN_USER        admin username, stored lowercase (default: admin)
   ADMIN_PASSWORD    admin password (default: admin)
   ITEM_X7           path to the server's item.x7 (default: /data/xml/item.x7)
+  WEAPON_X7         path to _eu_weapon.x7 (default: /data/xml/_eu_weapon.x7)
+  CAPSULE_X7        path to _eu_item_tooltip_addcapsule.x7, used to file capsules under
+                    the right Capsule & Set sub tab (optional; default under /data/xml)
   BOT_COUNT         number of regular bot accounts to create (default: 0 = none)
   BOT_PREFIX        bot account username prefix (default: bot) -> bot0..botN-1
   BOT_PASSWORD      shared bot password (default: admin)
@@ -33,6 +36,7 @@ ADMIN_USER = os.getenv("ADMIN_USER", "admin").lower()
 ADMIN_PASS = os.getenv("ADMIN_PASSWORD", "admin")
 ITEM_X7 = os.getenv("ITEM_X7", "/data/xml/item.x7")
 WEAPON_X7 = os.getenv("WEAPON_X7", "/data/xml/_eu_weapon.x7")
+CAPSULE_X7 = os.getenv("CAPSULE_X7", "/data/xml/_eu_item_tooltip_addcapsule.x7")
 SCHEMA_TIMEOUT = int(os.getenv("SCHEMA_TIMEOUT", "180"))
 BOT_COUNT = int(os.getenv("BOT_COUNT", "0"))
 BOT_PREFIX = os.getenv("BOT_PREFIX", "bot")
@@ -136,20 +140,77 @@ def ensure_channels():
     print(f"[provision] channels: {len(CHANNELS)} seeded (Beginner..Free/Clan)")
 
 
-def tabs_for(item_id):
-    """Client shop tab from an item number. Mirrors the working shop layout."""
+# Client shop/inventory tabs (shop_ inven.xui; the inventory window uses the same tabs and
+# filters on the same MainTab/SubTab the server sends). MainTab: 1 Capsule & Set,
+# 2 Weapon & Skill, 3 Costumes, 4 Items. The SubTab values are the ones the official shop
+# used, as preserved in the public Netsphere shop dumps (EU 1332 and Season 8). They agree
+# except for 403xxxx capsules (S8 files them all under Total) and two rifles; we follow 1332.
+#   Capsule & Set: 1 Costume, 2 Melee, 3 Rifle (any ranged weapon), 4 Etc, 5 Pets, 6 PEN, 7 Set
+#   Weapon & Skill: 1 Melee, 2 Rifle, 3 Guns, 4 Heavy gun, 5 Snipe, 6 Special, 7 Throwing, 8 Skill
+#   Costumes: 2 Head, 3 Face, 4 Jacket, 5 Pants, 6 Gloves, 7 Shoes, 8 Accessories, 9 Pets
+#   Items: 0 (Total only), 2 Esper Chip, 3 Enchant, 4 Pen Bonus, 5 Plus, 6 Etc
+CAPSULE_SUBS = (2, 3, 6, 11, 12, 16)   # OneTimeUse subcategories holding capsules/boxes
+WEAPON_SUB_TAB = {0: 1, 2: 4, 3: 5, 4: 6, 5: 7, 6: 6}  # 1 (rifle/gun) is split by type
+BOOST_SUB_TAB = {0: 4, 1: 5, 2: 5, 3: 3, 4: 5}          # PEN+ / EXP+ / MP+ / unique boosters
+PEN_ICON = 4040003     # the PEN icon capsule tooltips show for a PEN reward
+COUPON_ICON = 6000001  # the coupon icon most capsules list as a filler reward
+
+
+def _capsule_sub(item_id, capsule_icons, item_icons, depth=0):
+    """Capsule & Set sub tab, from the rewards the client's capsule tooltip shows.
+
+    The first reward icon that isn't the PEN/coupon filler decides it; a capsule that only
+    shows PEN is a PEN capsule. Matches the EU 1332 dump for ~96% of the capsules it has.
+    """
+    icons = capsule_icons.get(item_id)
+    if not icons:
+        return 6 if "pen" in item_icons.get(item_id, "") else 1
+    main = [i for i in icons if i not in (PEN_ICON, COUPON_ICON)]
+    if not main:
+        return 6 if PEN_ICON in icons else 4
+    first = main[0]
+    cat, sub = first // 1000000, (first % 1000000) // 10000
+    if cat == 1:
+        return 5 if sub == 7 else 1
+    if cat == 2:
+        return 2 if sub == 0 else 3
+    if cat == 4 and sub == 5:
+        return 1                       # set item -> costume set
+    if cat == 4 and sub in CAPSULE_SUBS:
+        if depth < 3 and capsule_icons.get(first):
+            return _capsule_sub(first, capsule_icons, item_icons, depth + 1)
+        return 1
+    return 4
+
+
+def tabs_for(item_id, tab_data=None):
+    """(MainTab, SubTab) for an item number; see the table above."""
+    weapon_types, capsule_icons, item_icons = tab_data or ({}, {}, {})
     cat = item_id // 1000000
     sub = (item_id % 1000000) // 10000
-    if cat == 1:          # Costume
-        return 3, sub + 2
-    if cat == 2:          # Weapon
-        weapon_sub = {0: 1, 1: 3, 2: 4, 3: 5, 4: 6, 5: 7, 6: 6}
-        return 2, weapon_sub.get(sub, 8)
+    if cat == 1:          # Costume (90+ are part variants of slot sub-90)
+        return 3, (sub - 90 if sub >= 90 else sub) + 2
+    if cat == 2:          # Weapon; rifle-category guns (revolver, handgun, shotgun, air gun) -> Guns
+        if sub == 1:
+            return 2, 3 if weapon_types.get(item_id) == 3 else 2
+        return 2, WEAPON_SUB_TAB.get(sub, 6)
     if cat == 3:          # Skill
         return 2, 8
+    if cat == 4:          # One-time use
+        if sub == 5:
+            return 1, 7                                    # set items
+        if sub == 2:                                       # fumbi capsules: Etc, or PEN
+            return 1, 6 if _capsule_sub(item_id, capsule_icons, item_icons) == 6 else 4
+        if sub in CAPSULE_SUBS:
+            return 1, _capsule_sub(item_id, capsule_icons, item_icons)
+        return 4, 0                                        # nickname/record/enchant tools, EXP
+    if cat == 5:          # Boost
+        return 4, BOOST_SUB_TAB.get(sub, 5)
     if cat == 7:          # Esper chip
-        return 2, 8
-    return 4, 6            # one-time-use items (capsules, boosts, coupons): items tab
+        return 4, 2
+    if cat == 9:          # enchant gems (not in either dump)
+        return 4, 3
+    return 4, 6            # coupons (6), cards (8), anything else: Items / Etc
 
 
 # Categories sold per unit (stackable, one-time use): everything except costumes (1),
@@ -193,9 +254,38 @@ def _load_weapon_keys():
     return {int(w.get("item_key")) for w in root.findall("weapon") if w.get("item_key")}
 
 
+def _load_tab_data():
+    """Inputs for tabs_for: weapon ability category (_eu_weapon.x7), the reward icons of
+    each capsule (_eu_item_tooltip_addcapsule.x7) and each item's icon file (item.x7)."""
+    weapon_types = {}
+    for w in ET.parse(WEAPON_X7).getroot().findall("weapon"):
+        ability = w.find("ability")
+        if w.get("item_key") and ability is not None and (ability.get("category") or "").isdigit():
+            weapon_types[int(w.get("item_key"))] = int(ability.get("category"))
+    capsule_icons = {}
+    try:
+        root = ET.parse(CAPSULE_X7).getroot()
+    except (OSError, ET.ParseError) as e:
+        print(f"[provision] shop: no capsule tooltip ({e}); capsules go to Capsule & Set / Costume")
+        root = None
+    for it in (root.findall("item") if root is not None else ()):
+        icon = it.find("capsule_icon")
+        if it.get("id") and icon is not None:
+            # attribute order is ID_1..ID_n as written in the file
+            capsule_icons[int(it.get("id"))] = [
+                int(v) for v in (x.strip() for x in icon.attrib.values()) if v.isdigit()]
+    item_icons = {}
+    for it in ET.parse(ITEM_X7).getroot().findall("item"):
+        graphic = it.find("graphic")
+        if it.get("item_key") and graphic is not None:
+            item_icons[int(it.get("item_key"))] = (graphic.get("icon_image") or "").lower()
+    return weapon_types, capsule_icons, item_icons
+
+
 def apply_shop():
     items = _load_item_map()
     weapon_keys = _load_weapon_keys()
+    tab_data = _load_tab_data()
 
     # Weapon-category items (item_id // 1000000 == 2) with no _eu_weapon.x7 entry: see
     # _load_weapon_keys. Skip them instead of selling something that can't render -
@@ -239,13 +329,13 @@ def apply_shop():
                     '("Id", "PriceGroupId", "PeriodType", "Period", "Price", "IsRefundable", "Durability", "IsEnabled") '
                     "VALUES (%s, 2, 4, %s, 0, TRUE, 1, TRUE)", (price_id, units))  # 4 = Units
             for item_id, gender in sorted(items.items()):
-                main, sub = tabs_for(item_id)
+                main, sub = tabs_for(item_id, tab_data)
                 cur.execute(
                     'INSERT INTO "shop_items" '
                     '("Id", "RequiredGender", "RequiredLicense", "Colors", "UniqueColors", "RequiredLevel", '
                     '"LevelLimit", "RequiredMasterLevel", "IsOneTimeUse", "IsDestroyable", "MainTab", "SubTab") '
-                    "VALUES (%s, %s, 0, 0, 0, 0, 0, 0, %s, TRUE, %s, %s)",
-                    (item_id, gender, is_consumable(item_id), main, sub))
+                    "VALUES (%s, %s, 0, 0, 0, 0, 0, 0, FALSE, TRUE, %s, %s)",
+                    (item_id, gender, main, sub))  # IsOneTimeUse is false in official shop data, even for capsules
                 iteminfo_id = existing_iteminfo_ids.get(item_id)
                 if iteminfo_id is None:
                     iteminfo_id = next_id
