@@ -75,6 +75,8 @@ namespace OpenS4L.Server.Game.Handlers
 
             if (character == null || item == null || plr.Room != null && plr.State != PlayerState.Lobby)
             {
+                _logger.Warning("Item use refused Action={Action} Item={ItemNumber} CharacterSlot={CharacterSlot} EquipSlot={EquipSlot} InRoom={InRoom}",
+                    message.Action, item?.ItemNumber, message.CharacterSlot, message.EquipSlot, plr.Room != null);
                 session.Send(new ServerResultAckMessage(ServerResult.FailedToRequestTask));
                 return true;
             }
@@ -87,13 +89,27 @@ namespace OpenS4L.Server.Game.Handlers
             switch (message.Action)
             {
                 case UseItemAction.Equip:
-                    if (character.Equip(item, message.EquipSlot) != CharacterInventoryError.OK)
+                {
+                    var error = character.Equip(item, message.EquipSlot);
+                    if (error != CharacterInventoryError.OK)
+                    {
+                        _logger.Warning("Equip refused Item={ItemNumber} EquipSlot={EquipSlot} Error={Error}",
+                            item.ItemNumber, message.EquipSlot, error);
                         session.Send(new ServerResultAckMessage(ServerResult.WearingUnusableItem));
+                    }
                     break;
+                }
 
                 case UseItemAction.UnEquip:
                     if (character.UnEquip(item.ItemNumber.Category, message.EquipSlot) != CharacterInventoryError.OK)
                         session.Send(new ServerResultAckMessage(ServerResult.WearingUnusableItem));
+                    break;
+
+                default:
+                    // Not known yet (using a Unique Booster may send this): logged so the real client's
+                    // request can be identified. No answer, as before: the client may send it routinely.
+                    _logger.Warning("Unknown item use Action={Action} Item={ItemNumber} CharacterSlot={CharacterSlot} EquipSlot={EquipSlot}",
+                        message.Action, item.ItemNumber, message.CharacterSlot, message.EquipSlot);
                     break;
             }
 

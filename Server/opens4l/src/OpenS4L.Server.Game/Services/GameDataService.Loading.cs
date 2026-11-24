@@ -490,11 +490,14 @@ namespace OpenS4L.Server.Game.Services
             var tablePath = Path.Combine(_resourcePath, "server", "ItemBag.xml");
             var fromTable = 0;
             var corrected = 0;
+            var slotsAdded = 0;
             if (File.Exists(tablePath))
             {
                 foreach (var capsule in CapsuleDataParser.ParseRewardTable(XDocument.Load(tablePath)))
                 {
-                    corrected += CapsuleDataParser.ApplyTooltip(capsule, tooltips.GetValueOrDefault(capsule.ItemNumber));
+                    var tooltip = tooltips.GetValueOrDefault(capsule.ItemNumber);
+                    corrected += CapsuleDataParser.ApplyTooltip(capsule, tooltip);
+                    slotsAdded += CapsuleDataParser.AddMissingSlots(capsule, tooltip);
                     capsules[capsule.ItemNumber] = capsule;
                     ++fromTable;
                 }
@@ -514,6 +517,7 @@ namespace OpenS4L.Server.Game.Services
                     unmapped[key] = unmapped.GetValueOrDefault(key) + 1;
                 });
                 CapsuleDataParser.ApplyBoxPeriod(capsule, Items.GetValueOrDefault(capsule.ItemNumber)?.Name);
+                CapsuleDataParser.WeightSetBoxes(capsule, n => Items.GetValueOrDefault(n)?.Name);
             }
 
             if (unmapped.Count > 0)
@@ -526,8 +530,8 @@ namespace OpenS4L.Server.Game.Services
 
             Capsules = capsules.ToImmutableDictionary();
             _logger.Information(
-                "Loaded {Count} capsules ({FromTable} with odds from the reward table, {Corrected} table rewards corrected by the tooltip)",
-                Capsules.Count, fromTable, corrected);
+                "Loaded {Count} capsules ({FromTable} with odds from the reward table, {Corrected} table rewards corrected by the tooltip, {SlotsAdded} tooltip rolls the table lacked)",
+                Capsules.Count, fromTable, corrected, slotsAdded);
         }
 
         private CapsuleEffectResolver CreateCapsuleEffectResolver(IEnumerable<CapsuleInfo> capsules)

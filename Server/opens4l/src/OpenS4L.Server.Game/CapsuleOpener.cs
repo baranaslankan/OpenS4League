@@ -42,9 +42,7 @@ namespace OpenS4L.Server.Game
             {
                 if (reward.Type == CapsuleRewardType.PEN)
                 {
-                    var amount = reward.PENMax > reward.PEN
-                        ? (uint)random.NextInt64(reward.PEN, (long)reward.PENMax + 1)
-                        : reward.PEN;
+                    var amount = RollPen(reward, random);
                     plr.PEN += amount;
                     penGained = true;
                     result.Add(new CapsuleRewardDto { RewardType = CapsuleRewardType.PEN, PEN = amount });
@@ -109,6 +107,20 @@ namespace OpenS4L.Server.Game
             if (option.NoEffects)
                 return (option.PeriodType, option.Period, Array.Empty<uint>(), true);
             return (option.PeriodType, option.Period, option.Effects.Length > 0 ? option.Effects : reward.Effects, false);
+        }
+
+        /// <summary>
+        /// A PEN amount. Ranges ("PEN 1,000~100,000") give no odds; rolling them evenly would average
+        /// half the top, so the roll is even on a log scale: as likely 1,000-10,000 as 10,000-100,000.
+        /// </summary>
+        public static uint RollPen(CapsuleRewardInfo reward, Random random)
+        {
+            if (reward.PENMax <= reward.PEN)
+                return reward.PEN;
+
+            var min = Math.Max(1.0, reward.PEN);
+            var amount = Math.Exp(Math.Log(min) + random.NextDouble() * (Math.Log(reward.PENMax) - Math.Log(min)));
+            return (uint)Math.Clamp(Math.Round(amount), reward.PEN, reward.PENMax);
         }
 
         /// <summary>Weighted pick by Rate; equal odds when no reward in the group has a rate.</summary>

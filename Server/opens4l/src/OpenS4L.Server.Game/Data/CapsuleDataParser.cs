@@ -88,13 +88,7 @@ namespace OpenS4L.Server.Game.Data
                 var isSetBox = number / 10000 == 405 && (slots == null || !slots.Attributes()
                     .Any(a => a.Name.LocalName.StartsWith("slot_") && uint.TryParse(a.Value.Trim(), out _)));
 
-                // Otherwise the tooltip's slot numbers can't be trusted as groups: set
-                // capsules list the top prize alone in slot 1 (in the reward tables it is a rare pick
-                // against a coupon) and often leave rewards without a slot. So one item is rolled from
-                // everything listed, and PEN, when listed, is rolled separately.
-                var items = new CapsuleRewardGroup();
-                var pens = new CapsuleRewardGroup();
-                var topPrizes = new List<CapsuleRewardInfo>();
+                var entries = new List<(CapsuleRewardInfo Reward, string Slot)>();
                 for (var i = 1; i <= 10; ++i)
                 {
                     if (!uint.TryParse((string)icons.Attribute("ID_" + i), out var rewardItem) || rewardItem == 0)
@@ -127,33 +121,25 @@ namespace OpenS4L.Server.Game.Data
                             reward.Options = BuildOptions(CapsuleTooltipText.Parse(text), ItemPeriodType.None, 0);
                     }
 
-                    (reward.Type == CapsuleRewardType.PEN ? pens : items).Rewards.Add(reward);
-                    if (reward.Type == CapsuleRewardType.Item && ((string)slots?.Attribute("slot_" + i))?.Trim() == "1")
-                        topPrizes.Add(reward);
+                    entries.Add((reward, ((string)slots?.Attribute("slot_" + i))?.Trim() ?? ""));
                 }
 
-                // The top prize (alone in slot 1, e.g. the permanent set) is rare: in the reward
-                // tables a set inside a capsule is almost always a 5% pick against the rest.
-                if (!isSetBox)
+                List<CapsuleRewardGroup> groups;
+                if (isSetBox)
+                {
+                    groups = entries.Select(e => new CapsuleRewardGroup { Rewards = { e.Reward } }).ToList();
+                }
+                else
                 {
                     // Costume capsules that list set boxes gave sets, not loose parts: their
                     // tooltips also show the set's parts (tops, gloves, ...), which are dropped.
-                    if (items.Rewards.Any(r => r.ItemNumber.Id / 10000 == 405))
-                    {
-                        foreach (var part in items.Rewards.Where(r => r.ItemNumber.Id / 1000000 == 1).ToList())
-                        {
-                            items.Rewards.Remove(part);
-                            topPrizes.Remove(part);
-                        }
-                    }
+                    if (entries.Any(e => IsSetBox(e.Reward.ItemNumber)))
+                        entries.RemoveAll(e => e.Reward.Type == CapsuleRewardType.Item && e.Reward.ItemNumber.Id / 1000000 == 1);
 
-                    WeightTopPrize(items, topPrizes);
+                    var numbered = entries.Where(e => uint.TryParse(e.Slot, out _)).Select(e => e.Slot).Distinct().ToList();
+                    groups = numbered.Count >= 2 ? GroupBySlot(entries) : GroupAsOne(entries);
                 }
 
-                var groups = isSetBox
-                    ? items.Rewards.Concat(pens.Rewards)
-                        .Select(r => new CapsuleRewardGroup { Rewards = { r } }).ToList()
-                    : new[] { items, pens }.Where(g => g.Rewards.Count > 0).ToList();
                 if (groups.Count > 0)
                     yield return new CapsuleInfo
                     {
@@ -163,6 +149,147 @@ namespace OpenS4L.Server.Game.Data
         }
 
         private static bool IsSetBox(ItemNumber item) => item.Id / 10000 == 405;
+
+        /// <summary>
+        /// Tooltips that number two or more slots give one reward per slot, e.g. "permanent set or
+        /// coupons" + "1/7/30-day set" + PEN, and double capsules give two items. A reward without a
+        /// slot joins the slot listed before it; PEN without a slot is its own roll.
+        /// </summary>
+        private static List<CapsuleRewardGroup> GroupBySlot(List<(CapsuleRewardInfo Reward, string Slot)> entries)
+        {
+            var bySlot = new List<(string Slot, CapsuleRewardGroup Group)>();
+            var loosePen = new CapsuleRewardGroup();
+            string last = null;
+            foreach (var (reward, slot) in entries)
+            {
+                var key = uint.TryParse(slot, out _) ? slot : null;
+                if (key == null && reward.Type == CapsuleRewardType.PEN)
+                {
+                    loosePen.Rewards.Add(reward);
+                    continue;
+                }
+
+                key ??= last ?? entries.Select(e => e.Slot).First(x => uint.TryParse(x, out _));
+                last = key;
+                var group = bySlot.FirstOrDefault(x => x.Slot == key).Group;
+                if (group == null)
+                {
+                    group = new CapsuleRewardGroup();
+                    bySlot.Add((key, group));
+                }
+
+                group.Rewards.Add(reward);
+            }
+
+            return bySlot.OrderBy(x => uint.Parse(x.Slot)).Select(x => x.Group).Append(loosePen)
+                .Where(g => g.Rewards.Count > 0).ToList();
+        }
+
+        /// <summary>
+        /// Other tooltips: one item rolled from everything listed (the slot-1 top prize at
+        /// <see cref="TopPrizePercent"/>%), and PEN, when listed, rolled separately.
+        /// </summary>
+        private static List<CapsuleRewardGroup> GroupAsOne(List<(CapsuleRewardInfo Reward, string Slot)> entries)
+        {
+            var items = new CapsuleRewardGroup();
+            var pens = new CapsuleRewardGroup();
+            var topPrizes = new List<CapsuleRewardInfo>();
+            foreach (var (reward, slot) in entries)
+            {
+                (reward.Type == CapsuleRewardType.PEN ? pens : items).Rewards.Add(reward);
+                if (reward.Type == CapsuleRewardType.Item && slot == "1")
+                    topPrizes.Add(reward);
+            }
+
+            WeightTopPrize(items, topPrizes);
+            return new[] { items, pens }.Where(g => g.Rewards.Count > 0).ToList();
+        }
+
+        /// <summary>
+        /// Odds inside per-slot groups that have none (no reward table): a permanent set box next to
+        /// other rewards is the rare <see cref="TopPrizePercent"/>% pick, and among timed set boxes the
+        /// shorter period is likelier (1/7/30 days weigh 3/2/1). Everything else is equally likely.
+        /// <paramref name="nameOf"/> gives an item's name, which holds a set box's period.
+        /// </summary>
+        public static void WeightSetBoxes(CapsuleInfo capsule, Func<ItemNumber, string> nameOf)
+        {
+            foreach (var group in capsule.Groups)
+            {
+                if (group.Rewards.Count < 2 || group.Rewards.Any(r => r.Rate > 0))
+                    continue;
+
+                var hours = new Dictionary<CapsuleRewardInfo, long>();
+                var permanent = new List<CapsuleRewardInfo>();
+                foreach (var r in group.Rewards.Where(r => r.Type == CapsuleRewardType.Item && IsSetBox(r.ItemNumber)))
+                {
+                    if (TryParseBoxPeriod(nameOf(r.ItemNumber), out var type, out var period))
+                        hours[r] = Length(type, period);
+                    else
+                        permanent.Add(r);
+                }
+
+                if (hours.Count == 0 && (permanent.Count == 0 || permanent.Count == group.Rewards.Count))
+                    continue;
+
+                // Weight per reward: timed set boxes by shortness rank, the rest 1 (the rank's top).
+                var ranks = hours.Values.Distinct().OrderByDescending(x => x).ToList();
+                var weight = group.Rewards.Where(r => !permanent.Contains(r)).ToDictionary(r => r,
+                    r => hours.TryGetValue(r, out var h) ? (uint)(ranks.IndexOf(h) + 1) : (uint)Math.Max(1, ranks.Count));
+                const uint total = 10000;
+                var pool = permanent.Count > 0 && weight.Count > 0 ? total - total * TopPrizePercent / 100 : total;
+                foreach (var r in permanent)
+                    r.Rate = Math.Max(1, (total - pool) / (uint)permanent.Count);
+                var sum = weight.Values.Sum(x => (long)x);
+                foreach (var (r, w) in weight)
+                    r.Rate = (uint)Math.Max(1, pool * w / sum);
+            }
+        }
+
+        /// <summary>
+        /// Puts back what a reward table leaves out of a tooltip that gives one reward per slot: a
+        /// slot none of whose items the table lists (e.g. the 1/7/30-day set slot) is added as its
+        /// own roll, and a PEN roll whose amounts fall outside the tooltip's range takes the range.
+        /// Returns how many groups were added or replaced.
+        /// </summary>
+        public static int AddMissingSlots(CapsuleInfo table, CapsuleInfo tooltip)
+        {
+            if (tooltip == null || tooltip.Groups.Count(g => g.Rewards.Any(r => r.Type == CapsuleRewardType.Item)) < 2)
+                return 0;
+
+            var changed = 0;
+            var listed = table.Groups.SelectMany(g => g.Rewards).Where(r => r.Type == CapsuleRewardType.Item)
+                .Select(r => r.ItemNumber).ToHashSet();
+            foreach (var group in tooltip.Groups)
+            {
+                if (group.Rewards.All(r => r.Type == CapsuleRewardType.Item) && !group.Rewards.Any(r => listed.Contains(r.ItemNumber)))
+                {
+                    table.Groups.Add(group);
+                    ++changed;
+                }
+            }
+
+            var pen = tooltip.Groups.SelectMany(g => g.Rewards).FirstOrDefault(r => r.Type == CapsuleRewardType.PEN && r.PENMax > r.PEN);
+            if (pen == null)
+                return changed;
+            if (!table.Groups.Any(g => g.Rewards.Count > 0 && g.Rewards.All(r => r.Type == CapsuleRewardType.PEN)))
+            {
+                table.Groups.Add(new CapsuleRewardGroup { Rewards = { pen } });
+                return changed + 1;
+            }
+
+            for (var i = 0; i < table.Groups.Count; ++i)
+            {
+                var rewards = table.Groups[i].Rewards;
+                if (rewards.Count > 0 && rewards.All(r => r.Type == CapsuleRewardType.PEN) &&
+                    rewards.Any(r => r.PEN < pen.PEN || Math.Max(r.PEN, r.PENMax) > pen.PENMax))
+                {
+                    table.Groups[i] = new CapsuleRewardGroup { Rewards = { pen } };
+                    ++changed;
+                }
+            }
+
+            return changed;
+        }
 
         /// <summary>
         /// Turns the tooltip's options for one reward into weighted reward options. Options without

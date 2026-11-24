@@ -700,5 +700,97 @@ namespace OpenS4L.Server.Mapping.Tests
             Assert.NotNull(plr.Inventory.CreateFromShop(Capsule));
             return (plr, channel);
         }
+
+        // Shaped like capsule 4035366: slot 1 = permanent set or coupons, slot 2 = one of the
+        // 1/7/30-day sets, slot 3 = PEN. One reward comes from every slot.
+        private static XDocument SlotCapsuleDoc() => XDocument.Parse(@"<x><item id=""4035366"">
+    <capsule_icon ID_1=""4051921"" ID_2=""6000001"" ID_3=""4051918"" ID_4=""4051919"" ID_5=""4051920"" ID_6=""4040003"" />
+    <capsule_slot slot_1=""1"" slot_2=""1"" slot_3=""2"" slot_4=""2"" slot_5=""2"" slot_6=""3"" />
+    <capsule_info effect_key_6=""PEN_KEY"" />
+  </item></x>");
+
+        private static readonly Dictionary<string, string> SlotCapsuleStrings =
+            new Dictionary<string, string> { ["PEN_KEY"] = "PEN{N}1,000~100,000" };
+
+        private static string SetName(ItemNumber n) => n.Id switch
+        {
+            4051918 => "Rider Set(1 day)",
+            4051919 => "Rider Set(7Days)",
+            4051920 => "Rider Set(30Days)",
+            _ => "Rider Set"
+        };
+
+        [Fact]
+        public void ParseTooltip_numberedSlots_rollOncePerSlot()
+        {
+            var capsule = CapsuleDataParser.ParseTooltip(SlotCapsuleDoc(), SlotCapsuleStrings).Single();
+
+            Assert.Equal(3, capsule.Groups.Count);
+            Assert.Equal(new uint[] { 4051921, 6000001 }, capsule.Groups[0].Rewards.Select(r => r.ItemNumber.Id));
+            Assert.Equal(new uint[] { 4051918, 4051919, 4051920 }, capsule.Groups[1].Rewards.Select(r => r.ItemNumber.Id));
+            Assert.Equal(CapsuleRewardType.PEN, Assert.Single(capsule.Groups[2].Rewards).Type);
+        }
+
+        [Fact]
+        public void WeightSetBoxes_permanentSetIsRare_shorterTimedSetIsLikelier()
+        {
+            var capsule = CapsuleDataParser.ParseTooltip(SlotCapsuleDoc(), SlotCapsuleStrings).Single();
+
+            CapsuleDataParser.WeightSetBoxes(capsule, SetName);
+
+            Assert.Equal(new uint[] { 500, 9500 }, capsule.Groups[0].Rewards.Select(r => r.Rate));
+            // 1 / 7 / 30 days weigh 3 / 2 / 1.
+            Assert.Equal(new uint[] { 5000, 3333, 1666 }, capsule.Groups[1].Rewards.Select(r => r.Rate));
+        }
+
+        [Fact]
+        public void AddMissingSlots_tableWithoutTimedSetSlot_getsItAndTheTooltipPenRange()
+        {
+            var table = CapsuleDataParser.ParseRewardTable(XDocument.Parse(@"<x><item Number=""4035366"">
+    <group>
+      <reward Type=""2"" Data=""4051921"" PeriodType=""4"" Value=""1"" Rate=""5"" />
+      <reward Type=""2"" Data=""6000001"" PeriodType=""4"" Value=""1"" Rate=""95"" />
+    </group>
+    <group>
+      <reward Type=""1"" Data=""0"" Value=""300"" Rate=""40"" />
+      <reward Type=""1"" Data=""0"" Value=""900"" Rate=""20"" />
+    </group>
+  </item></x>")).Single();
+            var tooltip = CapsuleDataParser.ParseTooltip(SlotCapsuleDoc(), SlotCapsuleStrings).Single();
+
+            Assert.Equal(2, CapsuleDataParser.AddMissingSlots(table, tooltip));
+
+            Assert.Equal(3, table.Groups.Count);
+            Assert.Equal(new uint[] { 5, 95 }, table.Groups[0].Rewards.Select(r => r.Rate)); // table odds kept
+            var pen = Assert.Single(table.Groups[1].Rewards);
+            Assert.Equal((1000u, 100000u), (pen.PEN, pen.PENMax));
+            Assert.Equal(new uint[] { 4051918, 4051919, 4051920 }, table.Groups[2].Rewards.Select(r => r.ItemNumber.Id));
+        }
+
+        [Fact]
+        public void ParseTooltip_doubleCapsule_unslottedRewardJoinsThePreviousSlot()
+        {
+            var doc = XDocument.Parse(@"<x><item id=""4110003"">
+    <capsule_icon ID_1=""2010010"" ID_2=""7000000"" ID_3=""2010002"" ID_4=""2010003"" />
+    <capsule_slot slot_1=""1"" slot_2=""2"" slot_3=""2"" slot_4="""" />
+  </item></x>");
+
+            var capsule = CapsuleDataParser.ParseTooltip(doc, new Dictionary<string, string>()).Single();
+
+            Assert.Equal(2, capsule.Groups.Count);
+            Assert.Equal(new uint[] { 7000000, 2010002, 2010003 }, capsule.Groups[1].Rewards.Select(r => r.ItemNumber.Id));
+        }
+
+        [Fact]
+        public void RollPen_staysInRange_andFavoursTheLowEnd()
+        {
+            var reward = new CapsuleRewardInfo { Type = CapsuleRewardType.PEN, PEN = 1000, PENMax = 100000 };
+            var random = new Random(7);
+
+            var rolls = Enumerable.Range(0, 2000).Select(_ => CapsuleOpener.RollPen(reward, random)).ToList();
+
+            Assert.All(rolls, x => Assert.InRange(x, 1000u, 100000u));
+            Assert.InRange(rolls.Count(x => x <= 10000), 800, 1200); // half below 10,000 on a log scale
+        }
     }
 }
