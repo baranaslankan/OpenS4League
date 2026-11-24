@@ -29,7 +29,7 @@ namespace OpenS4L.Server.Game
             // (100%), for the first group that has one ("double capsules: only the first item").
             // Not for skill capsules. It is used up by the capsule even if nothing permanent is in it.
             var booster = GetActiveBooster(plr);
-            var boost = booster == null || IsSkillCapsule(info) ? 0f : BoosterFactor(booster.ItemNumber);
+            var boost = booster == null || IsBoosterExempt(info, gameData) ? 0f : BoosterFactor(booster.ItemNumber);
             var isPermanent = (Func<CapsuleRewardInfo, bool>)(r => IsPermanent(r, gameData));
             var boosted = false;
             var rolled = new List<(CapsuleRewardInfo Reward, float Boost)>();
@@ -196,6 +196,21 @@ namespace OpenS4L.Server.Game
             {
                 Items = plr.EquippedBoosts.ToArray()
             });
+        }
+
+        // Capsules the 100% booster's tooltip lists as excluded (and capsules of boosters): the
+        // booster neither applies nor is used up there.
+        private static readonly System.Text.RegularExpressions.Regex BoosterExemptName = new System.Text.RegularExpressions.Regex(
+            @"Random Esperchip Capsule|Normal (Weapon|Costume) Box|^(Weapon|Male Costume|Female Costume) Capsule x\s*\d+|PEN Package|Level ?Up|Reward Capsule|Unique Booster Capsule",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+        public static bool IsBoosterExempt(CapsuleInfo info, GameDataService gameData)
+        {
+            var items = info.Groups.SelectMany(g => g.Rewards).Where(r => r.Type == CapsuleRewardType.Item).ToList();
+            if (items.Count > 0 && items.All(r => r.ItemNumber.Category == ItemCategory.Boost))
+                return true;
+            var name = gameData?.Items?.GetValueOrDefault(info.ItemNumber)?.Name;
+            return IsSkillCapsule(info) || name != null && BoosterExemptName.IsMatch(name);
         }
 
         private static bool IsSkillCapsule(CapsuleInfo info) =>

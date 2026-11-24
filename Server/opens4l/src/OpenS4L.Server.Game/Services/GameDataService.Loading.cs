@@ -525,6 +525,7 @@ namespace OpenS4L.Server.Game.Services
                 });
                 CapsuleDataParser.ApplyBoxPeriod(capsule, Items.GetValueOrDefault(capsule.ItemNumber)?.Name);
                 CapsuleDataParser.ApplySetGrade(capsule, Items.GetValueOrDefault(capsule.ItemNumber)?.Name);
+                CapsuleDataParser.ApplyBoosterRewards(capsule);
                 CapsuleDataParser.WeightSetBoxes(capsule, n => Items.GetValueOrDefault(n)?.Name);
             }
 

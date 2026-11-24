@@ -478,6 +478,26 @@ namespace OpenS4L.Server.Game.Data
         /// Force Pack group of each part's slot (orange tag), a timed set the cash shop's stats
         /// (whatever the reward table says). Slots without a Force Pack group keep the shop's stats.
         /// </summary>
+        public static void ApplyBoosterRewards(CapsuleInfo capsule)
+        {
+            foreach (var group in capsule.Groups)
+            {
+                var boosters = group.Rewards.Where(r => r.Type == CapsuleRewardType.Item && r.ItemNumber.Id / 1000 == 5040).ToList();
+                foreach (var r in boosters.Where(r => r.Options.Count == 0 && (r.PeriodType == ItemPeriodType.None || r.PeriodType == 0)))
+                {
+                    // The EU shop sold x1.5..x5 by time (10 hours, hidden 1 day) and 100% by uses.
+                    (r.PeriodType, r.Period) = r.ItemNumber.Id == 5040006 ? (ItemPeriodType.Units, (ushort)1) : (ItemPeriodType.Days, (ushort)1);
+                }
+
+                // No odds in the data; the stronger the booster the rarer, 100% rarest.
+                if (boosters.Count == group.Rewards.Count && boosters.Count > 1 && boosters.All(r => r.Rate == 0))
+                {
+                    foreach (var r in boosters)
+                        r.Rate = (r.ItemNumber.Id % 1000) switch { 1 => 3000u, 2 => 2500u, 3 => 2000u, 4 => 1200u, 5 => 800u, _ => 500u };
+                }
+            }
+        }
+
         public static void ApplySetGrade(CapsuleInfo capsule, string boxName)
         {
             if (capsule.ItemNumber.Id / 10000 != 405 || string.IsNullOrEmpty(boxName))
