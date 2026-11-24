@@ -85,6 +85,27 @@ namespace OpenS4L.Server.Mapping.Tests
             Assert.NotNull(ack);
         }
 
+        // The client waits for an answer to every basket item; a failed item must not stop the rest.
+        [Fact]
+        public async Task BuyItem_basket_answersEveryItemAfterNotEnoughMoney()
+        {
+            var (plr, channel) = await LoginAsync(1704);
+            plr.PEN = 0;
+
+            var handler = _ctx.Get<ShopHandler>();
+            await handler.OnHandle(new MessageContext { Session = plr.Session }, new ItemBuyItemReqMessage
+            {
+                Items = new[]
+                {
+                    new ShopItemDto { ItemNumber = (ItemNumber)2010001u, PriceType = ItemPriceType.PEN, PeriodType = ItemPeriodType.None, Period = 0, Color = 0 },
+                    new ShopItemDto { ItemNumber = (ItemNumber)9999999u, PriceType = ItemPriceType.PEN, PeriodType = ItemPeriodType.None, Period = 0, Color = 0 }
+                }
+            });
+
+            var acks = channel.Outbound.Select(o => o.GetType().GetProperty("Message")?.GetValue(o)).OfType<ItemBuyItemAckMessage>().ToList();
+            Assert.Equal(2, acks.Count);
+        }
+
         [Fact]
         public async Task BuyItem_nonexistentItem_returnsUnkown()
         {

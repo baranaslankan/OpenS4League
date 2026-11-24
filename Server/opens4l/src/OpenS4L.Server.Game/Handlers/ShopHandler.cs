@@ -110,7 +110,7 @@ namespace OpenS4L.Server.Game.Handlers
                         {
                             logger.Warning("Trying to buy item without enough PEN currentPEN={CurrentPEN}", plr.PEN);
                             session.Send(new ItemBuyItemAckMessage(itemToBuy, ItemBuyResult.NotEnoughMoney));
-                            return true;
+                            continue;
                         }
 
                         plr.PEN -= cost;
@@ -123,7 +123,7 @@ namespace OpenS4L.Server.Game.Handlers
                         {
                             logger.Warning("Trying to buy item without enough AP currentAP={CurrentAP}", plr.AP);
                             session.Send(new ItemBuyItemAckMessage(itemToBuy, ItemBuyResult.NotEnoughMoney));
-                            return true;
+                            continue;
                         }
 
                         plr.AP -= cost;
@@ -135,7 +135,7 @@ namespace OpenS4L.Server.Game.Handlers
                     default:
                         logger.Warning("Trying to buy item with invalid price type");
                         session.Send(new ItemBuyItemAckMessage(itemToBuy, ItemBuyResult.DBError));
-                        return true;
+                        continue;
                 }
 
                 for (var i = 0; i < count; ++i)
