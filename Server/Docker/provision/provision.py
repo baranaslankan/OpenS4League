@@ -40,11 +40,19 @@ Shop shape (all optional; without them the shop is the plain free one described 
   SHOP_SET_PERIODS  best (default) = list one period variant per costume set (permanent, else
                     the longest); all = list every "(1 day)/(7 days)/..." set item
   SHOP_REF_ONLY     1 = only list items the reference shop lists (default 0)
+  SHOP_EU           folder with the official EU shop the client cached (the decoded
+                    _eu_new_shop_item/_price/_effect.xml, see decode-shop below).
+                    Items it prices get its listings: a PEN one and an AP one, each with its
+                    own price per period and its own stats. Default: /data/server/eu2019.
+                    Never commit these files either.
+  SHOP_FREE         1 = every price is 0 (the periods and stats stay); default 0
 
 CLI (no DB needed):
   provision.py extract-ref DUMP.sql [DUMP2.sql ...] -o shop_ref.json [--client-dir GAME_DIR]
       turns SQL dumps into the JSON SHOP_REF reads; with --client-dir also writes
       client_icons.txt next to it (icon names under GAME_DIR/resources/image).
+  provision.py decode-shop GAME_DIR/shop -o OUTDIR
+      decodes the client's cached official shop (shop/*.s4) into the XML SHOP_EU reads.
 """
 import base64
 import hashlib
@@ -82,6 +90,8 @@ SHOP_REF_DEFAULT = "/data/server/shop_ref.json"
 SHOP_DAY_PERIODS = os.getenv("SHOP_DAY_PERIODS", "1").lower() in ("1", "true", "yes")
 SHOP_SET_PERIODS = os.getenv("SHOP_SET_PERIODS", "best").lower()
 SHOP_REF_ONLY = os.getenv("SHOP_REF_ONLY", "0").lower() in ("1", "true", "yes")
+SHOP_EU = os.getenv("SHOP_EU", "/data/server/eu2019")
+SHOP_FREE = os.getenv("SHOP_FREE", "0").lower() in ("1", "true", "yes")
 
 # Matching OpenS4L.Common/Cryptography/PasswordHasher.cs
 PBKDF2_ITERATIONS = 24000
@@ -326,8 +336,10 @@ DURABILITY_PERMANENT = 2400000  # far above the client's 2400 max: owned gear ne
 # Price-group signatures (tuples of (PeriodType, Period)). Group 1 / price 1 is the free permanent
 # price and group 2 / prices 2-5 the free 1/2/5/10 units, as before the reference shop existed:
 # existing player_items and start_items point at those Ids.
-SIG_PERMANENT = ((PERIOD_PERMANENT, 0),)
-SIG_UNITS = ((PERIOD_UNITS, 1), (PERIOD_UNITS, 2), (PERIOD_UNITS, 5), (PERIOD_UNITS, 10))
+# A signature entry is (PeriodType, Period, Price, IsRefundable, IsEnabled).
+SIG_PERMANENT = ((PERIOD_PERMANENT, 0, 0, True, True),)
+SIG_UNITS = tuple((PERIOD_UNITS, n, 0, True, True) for n in (1, 2, 5, 10))
+PRICE_PEN, PRICE_AP = 1, 2   # ItemPriceType
 
 NAME_MISSING = ("", "not trans", "none")
 SET_PERIOD_RE = re.compile(r"\s*\(\s*(?:(\d+)\s*(일|시간)|내구제|영구)\s*\)\s*$")
@@ -608,9 +620,9 @@ def _price_sig(item_id, entry):
     periods = [tuple(p) for p in (entry or {}).get("periods", ())]
     if is_consumable(item_id):
         units = sorted({p for t, p in periods if t == PERIOD_UNITS and p > 0})
-        return tuple((PERIOD_UNITS, u) for u in units) if units else SIG_UNITS
+        return tuple((PERIOD_UNITS, u, 0, True, True) for u in units) if units else SIG_UNITS
     days = sorted({p for t, p in periods if t == PERIOD_DAYS and p > 0}) if SHOP_DAY_PERIODS else []
-    return SIG_PERMANENT + tuple((PERIOD_DAYS, d) for d in days)
+    return SIG_PERMANENT + tuple((PERIOD_DAYS, d, 0, True, True) for d in days)
 
 
 def _sig_name(sig):
@@ -619,8 +631,99 @@ def _sig_name(sig):
     if sig == SIG_UNITS:
         return "FreeUnits"
     if sig[0][0] == PERIOD_UNITS:
-        return ("Free U" + "/".join(str(p) for _, p in sig))[:20]
-    return ("Free P+" + "/".join(str(p) for t, p in sig if t == PERIOD_DAYS) + "d")[:20]
+        return ("Free U" + "/".join(str(p) for _, p, *_ in sig))[:20]
+    return ("Free P+" + "/".join(str(p) for t, p, *_ in sig if t == PERIOD_DAYS) + "d")[:20]
+
+
+# ---------------------------------------------------------------------------------------------
+# Official EU shop (SHOP_EU): what the client cached of the last official shop
+# ---------------------------------------------------------------------------------------------
+EU_PERIODS = {"NONE": PERIOD_PERMANENT, "HOURS": PERIOD_HOURS, "DAYS": PERIOD_DAYS,
+              "USECNT": PERIOD_UNITS}
+# shop_id -> ItemPriceType. 1 is the PEN shop (permanent ~5000 PEN). 2 (capsules, boxes) and 3
+# (costumes, weapons; permanent 399-1999) are the cash shops; this server sells those for AP.
+# 4 (random shop) and 5 (coupons) are not item shops.
+EU_SHOPS = {"1": PRICE_PEN, "2": PRICE_AP, "3": PRICE_AP}
+
+
+def load_eu(known_effects, known_matches):
+    """{item_id: [listing]} from SHOP_EU, {} when it is not there. A listing is
+    (price type, name, signature, effect (preview, name, effects) or None, discount). Every shop
+    an item has a price group in counts, sold in 2019 or not: the files are the last official
+    shop, and the 2013 client's shop sold many items that were retired by then. One AP listing
+    per item: shop 3 wins over shop 2 for costumes and weapons, shop 2 otherwise."""
+    paths = {k: os.path.join(SHOP_EU, f"_eu_new_shop_{k}.xml") for k in ("item", "price", "effect")}
+    if not all(os.path.isfile(p) for p in paths.values()):
+        return {}
+    try:
+        price_root = ET.parse(paths["price"]).getroot()
+        item_root = ET.parse(paths["item"]).getroot()
+        effect_root = ET.parse(paths["effect"]).getroot()
+    except ET.ParseError as e:
+        print(f"[provision] shop: {SHOP_EU} unusable ({e}) - ignored")
+        return {}
+
+    groups = {}
+    for g in price_root.iter("price_group"):
+        # Prices with shop_open=false stay as disabled prices: the shop doesn't offer them,
+        # but owned items and capsule rewards can still have that period (e.g. a permanent
+        # item whose PEN listing sells only 1/7/30 days).
+        sig = {}
+        for p in g.iter("price"):
+            ptype = EU_PERIODS.get((p.get("period_type") or "").upper())
+            if ptype is None:
+                continue
+            period = 0 if ptype == PERIOD_PERMANENT else int(p.get("period") or 0)
+            if ptype != PERIOD_PERMANENT and period <= 0:
+                continue
+            entry = (ptype, period, max(0, int(p.get("price") or 0)),
+                     (p.get("refund") or "").lower() == "true",
+                     (p.get("shop_open") or "").lower() == "true")
+            if (ptype, period) not in sig or entry[4] and not sig[(ptype, period)][4]:
+                sig[(ptype, period)] = entry
+        if any(e[4] for e in sig.values()):
+            # Groups that never had a permanent price get a hidden one (price 0, not offered):
+            # owned permanent items and permanent capsule rewards of those items stay permanent.
+            if all(t != PERIOD_UNITS for t, *_ in sig) and (PERIOD_PERMANENT, 0) not in sig:
+                sig[(PERIOD_PERMANENT, 0)] = (PERIOD_PERMANENT, 0, 0, False, False)
+            groups[(g.get("shop_id"), g.get("group_name"))] = tuple(sorted(sig.values()))
+    matches = {}
+    for m in effect_root.iter("effect_match"):
+        effs = [int(e.get("effect_id")) for e in m.iter("effects") if (e.get("effect_id") or "").isdigit()]
+        matches[m.get("key")] = effs
+
+    def effect(value):
+        if not value or not value.isdigit() or int(value) == 0:
+            return None
+        key = int(value)
+        effs = sorted({e for e in matches.get(value, [key]) if e in known_effects or e in known_matches})
+        if not effs:
+            return None
+        preview = key if key in known_effects or key in known_matches else effs[0]
+        return preview, str(key), tuple(effs)
+
+    out = {}
+    for it in item_root.iter("item"):
+        if not (it.get("key") or "").isdigit():
+            continue
+        item_id = int(it.get("key"))
+        by_type = {}
+        for info in it.iter("shopinfo"):
+            shop_id = info.get("shop_id")
+            price_type = EU_SHOPS.get(shop_id)
+            sig = groups.get((shop_id, info.get("price_group")))
+            if price_type is None or not sig:
+                continue
+            listing = (price_type, info.get("price_group"), sig, effect(info.get("effect_match")),
+                       min(100, max(0, int(info.get("discount") or 0))))
+            prefer_3 = item_id // 1000000 in (1, 2)
+            old = by_type.get(price_type)
+            if old is None or (price_type == PRICE_AP and (shop_id == "3") == prefer_3):
+                by_type[price_type] = listing
+        if by_type:
+            out[item_id] = [by_type[t] for t in sorted(by_type)]
+    print(f"[provision] shop: official EU shop {SHOP_EU}: {len(out)} items priced")
+    return out
 
 
 def _effect_of(entry, known_effects, known_matches):
@@ -648,6 +751,7 @@ def apply_shop():
     icons = _load_client_icons()
     known_effects, known_matches = _load_known_effects()
     ref = load_ref()
+    eu = load_eu(known_effects, known_matches)
     if icons is None:
         print(f"[provision] shop: no {CLIENT_ICONS} or {RESOURCES_DIR}/image - not filtering on icons")
 
@@ -681,9 +785,14 @@ def apply_shop():
         # disconnected right after login. Snapshot the current ShopItemId -> Id mapping and
         # reuse it below so re-running this script keeps existing IDs stable; only items
         # that are genuinely new get a fresh Id appended after the current max.
-        cur.execute('SELECT "ShopItemId", "Id" FROM "shop_iteminfos"')
-        existing_iteminfo_ids = dict(cur.fetchall())
-        next_id = max(existing_iteminfo_ids.values(), default=0) + 1
+        # Keyed by (ShopItemId, PriceType): an item can have a PEN and an AP listing.
+        cur.execute('SELECT i."ShopItemId", COALESCE(g."PriceType", 1), i."Id" FROM "shop_iteminfos" i '
+                    'LEFT JOIN "shop_price_groups" g ON g."Id" = i."PriceGroupId" ORDER BY i."Id"')
+        existing_iteminfo_ids, existing_by_item = {}, {}
+        for item_id, price_type, info_id in cur.fetchall():
+            existing_iteminfo_ids.setdefault((item_id, price_type), info_id)
+            existing_by_item.setdefault(item_id, []).append(info_id)
+        next_id = max((i for ids in existing_by_item.values() for i in ids), default=0) + 1
         # Owned items (and starter gear) must stay in the shop data even when hidden, or the
         # game server drops them at login; they are kept with their listing switched off.
         cur.execute('SELECT DISTINCT i."ShopItemId" FROM "player_items" pi '
@@ -699,32 +808,62 @@ def apply_shop():
         keep |= {i for i, why in reasons.items() if why == "set period variant"}
         shop = {i: i not in reasons for i in items if i not in reasons or i in keep}
 
-        # Price groups: one per distinct period signature; 1 = permanent and 2 = 1/2/5/10 units
-        # always exist so their Ids stay what they always were.
-        sig_of = {i: _price_sig(i, ref.get(i)) for i in shop}
-        sigs = [SIG_PERMANENT, SIG_UNITS] + sorted(set(sig_of.values()) - {SIG_PERMANENT, SIG_UNITS})
-        group_of_sig = {s: n + 1 for n, s in enumerate(sigs)}
-        prices = []   # (price id, group id, period type, period, durability)
-        for sig in sigs:
-            for ptype, period in sig:
-                prices.append((len(prices) + 1, group_of_sig[sig], ptype, period,
-                               1 if ptype == PERIOD_UNITS else DURABILITY_PERMANENT))
+        # Listings per item: (price type, group name, price signature, effect, discount). Items
+        # the official EU shop prices get its PEN and AP listings; the rest one free PEN listing
+        # with the reference's periods and stats.
+        listings_of = {}
+        for i in shop:
+            if i in eu:
+                listings_of[i] = [
+                    (t, name, tuple((pt, pe, 0 if SHOP_FREE else pr, rf, en) for pt, pe, pr, rf, en in sig), e, d)
+                    for t, name, sig, e, d in eu[i]]
+            else:
+                listings_of[i] = [(PRICE_PEN, None, _price_sig(i, ref.get(i)),
+                                   _effect_of(ref.get(i), known_effects, known_matches), 0)]
+
+        # Price groups: one per (price type, signature); 1 = free permanent and 2 = free 1/2/5/10
+        # units always exist so their Ids stay what they always were.
+        fixed = [(PRICE_PEN, SIG_PERMANENT), (PRICE_PEN, SIG_UNITS)]
+        group_names = {}
+        for listings in listings_of.values():
+            for t, name, sig, _e, _d in listings:
+                group_names.setdefault((t, sig), name)
+        sigs = fixed + sorted(set(group_names) - set(fixed))
+        group_of_sig = {k: n + 1 for n, k in enumerate(sigs)}
+        used_names = set()
+
+        def group_name(key):
+            t, sig = key
+            base = group_names.get(key) or _sig_name(sig)
+            base = (base if group_names.get(key) is None else f"{base} {'PEN' if t == PRICE_PEN else 'AP'}")[:20]
+            name, n = base, 1
+            while name in used_names:
+                n += 1
+                name = f"{base[:17]}~{n}"
+            used_names.add(name)
+            return name
+
+        prices = []   # (price id, group id, period type, period, durability, price, refundable, enabled)
+        for key in sigs:
+            for ptype, period, price, refundable, enabled in key[1]:
+                prices.append((len(prices) + 1, group_of_sig[key], ptype, period,
+                               1 if ptype == PERIOD_UNITS else DURABILITY_PERMANENT, price, refundable, enabled))
 
         # Effect groups: the client gets them as (PreviewEffect, effects) and finds an item's
         # group by its PreviewEffect, so previews are unique per group.
         effect_groups = {0: ("None", ())}
         effect_of = {}
         conflicts = 0
-        for i in shop:
-            e = _effect_of(ref.get(i), known_effects, known_matches)
-            if not e:
-                continue
-            preview, name, effs = e
-            if preview in effect_groups and effect_groups[preview][1] != effs:
-                conflicts += 1
-            else:
-                effect_groups.setdefault(preview, (name, effs))
-            effect_of[i] = preview
+        for i, listings in listings_of.items():
+            for t, _name, _sig, e, _d in listings:
+                if not e:
+                    continue
+                preview, name, effs = e
+                if preview in effect_groups and effect_groups[preview][1] != effs:
+                    conflicts += 1
+                else:
+                    effect_groups.setdefault(preview, (name, effs))
+                effect_of[(i, t)] = preview
         group_of_preview = {p: n + 1 for n, p in enumerate(sorted(effect_groups))}
 
         # Disable FK checks for the reload (like FOREIGN_KEY_CHECKS=0 in MySQL).
@@ -742,14 +881,15 @@ def apply_shop():
                     effect_row += 1
                     cur.execute('INSERT INTO "shop_effects" ("Id", "EffectGroupId", "Effect") '
                                 'VALUES (%s, %s, %s)', (effect_row, gid, effect))
-            for sig in sigs:
+            for key in sigs:
                 cur.execute('INSERT INTO "shop_price_groups" ("Id", "Name", "PriceType") '
-                            'VALUES (%s, %s, 1)', (group_of_sig[sig], _sig_name(sig)))  # 1 = PEN
-            for pid, gid, ptype, period, durability in prices:
+                            'VALUES (%s, %s, %s)', (group_of_sig[key], group_name(key), key[0]))
+            for pid, gid, ptype, period, durability, price, refundable, enabled in prices:
                 cur.execute(
                     'INSERT INTO "shop_prices" '
                     '("Id", "PriceGroupId", "PeriodType", "Period", "Price", "IsRefundable", "Durability", "IsEnabled") '
-                    "VALUES (%s, %s, %s, %s, 0, TRUE, %s, TRUE)", (pid, gid, ptype, period, durability))
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                    (pid, gid, ptype, period, price, refundable, durability, enabled))
             for item_id, listed in sorted(shop.items()):
                 gender = items[item_id]
                 main, sub = tabs_for(item_id, tab_data)
@@ -763,16 +903,23 @@ def apply_shop():
                      min(255, int(entry.get("unique_colors", 0))), main, sub))
                 # IsOneTimeUse is false in official shop data, even for capsules (the client
                 # hangs on "Requesting" buying a capsule flagged one-time-use)
-                iteminfo_id = existing_iteminfo_ids.get(item_id)
-                if iteminfo_id is None:
-                    iteminfo_id = next_id
-                    next_id += 1
-                cur.execute(
-                    'INSERT INTO "shop_iteminfos" '
-                    '("Id", "ShopItemId", "PriceGroupId", "EffectGroupId", "DiscountPercentage", "IsEnabled") '
-                    "VALUES (%s, %s, %s, %s, 0, %s)",
-                    (iteminfo_id, item_id, group_of_sig[sig_of[item_id]],
-                     group_of_preview[effect_of.get(item_id, 0)], listed))
+                # Keep each listing's Id (owned items point at it): same item and price type
+                # first, else another old listing of the item, else a fresh Id.
+                spare = [x for x in existing_by_item.get(item_id, [])
+                         if x not in {existing_iteminfo_ids.get((item_id, t)) for t, *_ in listings_of[item_id]}]
+                for t, _name, sig, _e, discount in listings_of[item_id]:
+                    iteminfo_id = existing_iteminfo_ids.get((item_id, t))
+                    if iteminfo_id is None and spare:
+                        iteminfo_id = spare.pop(0)
+                    if iteminfo_id is None:
+                        iteminfo_id = next_id
+                        next_id += 1
+                    cur.execute(
+                        'INSERT INTO "shop_iteminfos" '
+                        '("Id", "ShopItemId", "PriceGroupId", "EffectGroupId", "DiscountPercentage", "IsEnabled") '
+                        "VALUES (%s, %s, %s, %s, %s, %s)",
+                        (iteminfo_id, item_id, group_of_sig[(t, sig)],
+                         group_of_preview[effect_of.get((item_id, t), 0)], discount, listed))
             # Explicit Ids were inserted above, so bump the identity sequences past the highest
             # one used or the next auto-assigned (non-reprovision) insert would collide with it.
             for table, top in (("shop_iteminfos", next_id - 1), ("shop_prices", len(prices)),
@@ -789,7 +936,10 @@ def apply_shop():
     print(f"[provision] shop: {listed} items listed, {len(shop) - listed} kept unlisted (owned/starter/set variants), "
           f"{len(sigs)} price groups, {len(group_of_preview)} effect groups"
           + (f" ({conflicts} preview clashes kept the first group)" if conflicts else "")
-          + (f", reference covers {sum(1 for i in shop if i in ref)}" if ref else " (no reference shop)"))
+          + (f", reference covers {sum(1 for i in shop if i in ref)}" if ref else " (no reference shop)")
+          + (f", official EU prices for {sum(1 for i in shop if i in eu)}"
+             f" ({sum(1 for i in shop if len(listings_of[i]) > 1)} in PEN and AP)" if eu else "")
+          + (" - all prices 0 (SHOP_FREE)" if SHOP_FREE else ""))
     by_reason = {}
     for item_id, why in reasons.items():
         by_reason.setdefault(why, []).append(item_id)
@@ -805,17 +955,19 @@ def _migrate_player_items(cur, old_prices, prices):
     and fold duplicate per-unit rows into one stack (the client shows a per-unit item's
     durability as its count). Safe to re-run."""
     by_group = {}
-    for pid, gid, ptype, period, durability in prices:
+    for pid, gid, ptype, period, durability, *_ in prices:
         by_group.setdefault(gid, []).append((pid, ptype, period, durability))
     cur.execute('SELECT i."Id", i."PriceGroupId", COALESCE(json_agg(e."Effect" ORDER BY e."Effect") '
-                'FILTER (WHERE e."Effect" <> 0), %s) FROM "shop_iteminfos" i '
-                'LEFT JOIN "shop_effects" e ON e."EffectGroupId" = i."EffectGroupId" GROUP BY 1, 2',
+                'FILTER (WHERE e."Effect" <> 0), %s), i."ShopItemId" FROM "shop_iteminfos" i '
+                'LEFT JOIN "shop_effects" e ON e."EffectGroupId" = i."EffectGroupId" GROUP BY 1, 2, 4',
                 ("[]",))
-    infos = {}
-    for info_id, gid, effects in cur.fetchall():
+    infos, listings = {}, {}
+    for info_id, gid, effects, shop_item in cur.fetchall():
         if isinstance(effects, str):
             effects = json.loads(effects)
         infos[info_id] = (gid, [int(e) for e in effects or ()])
+        listings.setdefault(shop_item, []).append(info_id)
+    info_item = {i: item for item, ids in listings.items() for i in ids}
     cur.execute('SELECT "Id", "ShopItemInfoId", "ShopPriceId", "Durability", "Effects" FROM "player_items"')
     moved = effected = 0
     for item_id, info_id, price_id, durability, effects in cur.fetchall():
@@ -825,9 +977,21 @@ def _migrate_player_items(cur, old_prices, prices):
         choices = by_group[gid]
         old = old_prices.get(price_id)
         same = [c for c in choices if old and (c[1], c[2]) == tuple(old)]
+        new_info = info_id
+        if not same and old:
+            # The period is gone from this listing: another listing of the item may have it
+            # (a permanent item whose PEN listing only sells days, while the AP one is permanent).
+            for other in listings.get(info_item.get(info_id), []):
+                hit = [c for c in by_group[infos[other][0]] if (c[1], c[2]) == tuple(old)]
+                if hit:
+                    new_info, gid, group_effects, same = other, infos[other][0], infos[other][1], hit
+                    break
         new = (same or [c for c in choices if c[1] == PERIOD_PERMANENT]
                or sorted(choices, key=lambda c: c[2]))[0]
         sets, args = [], []
+        if new_info != info_id:
+            sets.append('"ShopItemInfoId" = %s')
+            args.append(new_info)
         if new[0] != price_id:
             sets.append('"ShopPriceId" = %s')
             args.append(new[0])
@@ -977,6 +1141,145 @@ def ensure_bots():
         return created
 
 
+# ---------------------------------------------------------------------------------------------
+# Client shop cache (shop/*.s4): the last shop the official server sent, as the client saved it
+# ---------------------------------------------------------------------------------------------
+# Layout (S4ClientLocal.exe 0.8.32.26995; the 2019 EU client uses the same): u32 LE plain size,
+# then an LZO1X stream whose bytes are stored as rol8(b, 1) ^ KEY[i % 40]. The writer compresses
+# at 0x1039940 and encrypts at 0xfffa00; decrypt is 0xfffaa0, the key is at VA 0x14757a0.
+S4CACHE_KEY = bytes.fromhex("a10c247ae38c77c049c0939a23828dc89db3e450b1e29e4415540b2264bd8b3a53a5330a0a731e6a")
+
+
+def _s4cache_decrypt(buf):
+    out = bytearray(len(buf))
+    for i, c in enumerate(buf):
+        x = c ^ S4CACHE_KEY[i % 40]
+        out[i] = ((x >> 1) | (x << 7)) & 0xFF
+    return bytes(out)
+
+
+def _lzo1x_decompress(src, out_len):
+    dst = bytearray()
+    ip = 0
+    n = len(src)
+
+    def get_len(base, mask_val):
+        nonlocal ip
+        t = mask_val
+        if t == 0:
+            t = base
+            while src[ip] == 0:
+                t += 255
+                ip += 1
+            t += src[ip]
+            ip += 1
+        return t
+
+    def copy_match(dist, length):
+        start = len(dst) - dist
+        if start < 0:
+            raise ValueError("lookbehind overrun")
+        for k in range(length):
+            dst.append(dst[start + k])
+
+    t = src[ip]
+    state = 0  # literals copied by previous instruction (0,1-3,4+)
+    if t > 17:
+        ip += 1
+        t -= 17
+        dst += src[ip:ip + t]; ip += t
+        state = 4 if t >= 4 else t
+    while True:
+        t = src[ip]; ip += 1
+        if t < 16:
+            if state == 0:
+                # literal run
+                if t == 0:
+                    t = 15
+                    while src[ip] == 0:
+                        t += 255; ip += 1
+                    t += src[ip]; ip += 1
+                t += 3
+                dst += src[ip:ip + t]; ip += t
+                state = 4
+                continue
+            elif state == 4:
+                # M1 after a literal run of >=4: 3-byte match, dist 2049..3072
+                dist = 1 + 0x0800 + (t >> 2) + (src[ip] << 2); ip += 1
+                copy_match(dist, 3)
+            else:
+                dist = 1 + (t >> 2) + (src[ip] << 2); ip += 1
+                copy_match(dist, 2)
+            s = t & 3
+        elif t >= 64:
+            dist = 1 + ((t >> 2) & 7) + (src[ip] << 3); ip += 1
+            length = (t >> 5) + 1
+            copy_match(dist, length)
+            s = t & 3
+        elif t >= 32:
+            length = t & 31
+            if length == 0:
+                length = 31
+                while src[ip] == 0:
+                    length += 255; ip += 1
+                length += src[ip]; ip += 1
+            length += 2
+            v = src[ip] | (src[ip + 1] << 8); ip += 2
+            dist = 1 + (v >> 2)
+            copy_match(dist, length)
+            s = v & 3
+        else:  # 16..31
+            length = t & 7
+            if length == 0:
+                length = 7
+                while src[ip] == 0:
+                    length += 255; ip += 1
+                length += src[ip]; ip += 1
+            length += 2
+            v = src[ip] | (src[ip + 1] << 8); ip += 2
+            dist = ((t & 8) << 11) + (v >> 2)
+            if dist == 0:
+                break  # end of stream
+            dist += 0x4000
+            copy_match(dist, length)
+            s = v & 3
+        if s:
+            dst += src[ip:ip + s]; ip += s
+        state = s
+    if len(dst) != out_len:
+        raise ValueError(f"size mismatch {len(dst)} != {out_len}")
+    return bytes(dst)
+
+
+def decode_s4cache(path):
+    raw = open(path, "rb").read()
+    size = int.from_bytes(raw[:4], "little")
+    return _lzo1x_decompress(_s4cache_decrypt(raw[4:]), size)
+
+
+def decode_shop_cli(argv):
+    """provision.py decode-shop GAME_DIR/shop -o OUTDIR   (writes _eu_new_shop_item.xml etc.)"""
+    out, dirs = None, []
+    it = iter(argv)
+    for a in it:
+        if a == "-o":
+            out = next(it)
+        else:
+            dirs.append(a)
+    if not out or not dirs:
+        raise SystemExit(decode_shop_cli.__doc__)
+    os.makedirs(out, exist_ok=True)
+    for d in dirs:
+        for name in sorted(os.listdir(d)):
+            if not name.endswith(".s4"):
+                continue
+            data = decode_s4cache(os.path.join(d, name))
+            path = os.path.join(out, name[:-3] + ".xml")
+            with open(path, "wb") as f:
+                f.write(data)
+            print(f"{name} -> {path} ({len(data)} bytes)")
+
+
 def main():
     print(f"[provision] connecting to {DB_HOST}:5432 as postgres...")
     wait_for_schema()
@@ -995,5 +1298,7 @@ def main():
 if __name__ == "__main__":
     if sys.argv[1:2] == ["extract-ref"]:
         extract_ref_cli(sys.argv[2:])
+    elif sys.argv[1:2] == ["decode-shop"]:
+        decode_shop_cli(sys.argv[2:])
     else:
         main()

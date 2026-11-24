@@ -141,6 +141,10 @@ services:
       SHOP_DAY_PERIODS: ${SHOP_DAY_PERIODS:-1}
       # Original shop listed every set variant: permanent next to 1/7/30 days (basic colour).
       SHOP_SET_PERIODS: ${SHOP_SET_PERIODS:-all}
+      # Official EU shop (decoded client cache, operator-supplied in the data volume): its PEN
+      # and AP prices per period and its stats per currency. SHOP_FREE=1 keeps every price at 0.
+      SHOP_EU: ${SHOP_EU:-/data/server/eu2019}
+      SHOP_FREE: ${SHOP_FREE:-0}
     volumes:
       - opens4l-clientdata:/data:ro
     depends_on:

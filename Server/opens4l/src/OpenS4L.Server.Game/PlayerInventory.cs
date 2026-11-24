@@ -274,15 +274,22 @@ namespace OpenS4L.Server.Game
             // listing per item, whose price group carries permanent + the day periods.
             var choice = shopItem.ItemInfos
                 .Where(info => info.PriceGroup != null)
-                .SelectMany(info => info.PriceGroup.Prices.Where(p => p.IsEnabled).Select(price => (info, price)))
+                // Prices the shop doesn't offer (IsEnabled false, e.g. the hidden permanent price of
+                // an item sold for days only) still count when they are the exact period asked for.
+                .SelectMany(info => info.PriceGroup.Prices.Select(price => (info, price)))
+                .Where(x => x.price.IsEnabled || (x.price.PeriodType == periodType && x.price.Period == period))
                 .OrderBy(x => x.info.IsEnabled ? 0 : 1)
                 .ThenBy(x => x.price.PeriodType == periodType && x.price.Period == period ? 0
                     // a timed reward without its exact period: the nearest timed price, never permanent
                     : IsTimed(periodType) && IsTimed(x.price.PeriodType) ? 1
                     : x.price.PeriodType == ItemPeriodType.None ? 2 : 3)
+                .ThenBy(x => x.price.IsEnabled ? 0 : 1)
                 .ThenBy(x => IsTimed(periodType) && IsTimed(x.price.PeriodType)
                     ? Math.Abs(ToHours(x.price.PeriodType, x.price.Period) - ToHours(periodType, period))
-                    : 0)
+                    // a permanent reward of an item sold only for a time: the longest time
+                    : periodType == ItemPeriodType.None && IsTimed(x.price.PeriodType)
+                        ? -ToHours(x.price.PeriodType, x.price.Period)
+                        : 0)
                 .ThenBy(x => x.price.Period) // per-unit items: one unit
                 .FirstOrDefault();
 

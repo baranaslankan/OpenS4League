@@ -298,6 +298,34 @@ namespace OpenS4L.Server.Mapping.Tests
         }
 
         [Fact]
+        public async Task CreateFromShop_hiddenExactPrice_isUsedForRewards()
+        {
+            var (plr, _) = await LoginWithCapsuleAsync(9313, withPen: false);
+            var gun = new ItemNumber(2000097u);
+            GameFixtures.SeedShopItem(_ctx.GameData, gun, GameFixtures.SeedPeriodPriceGroup(_ctx.GameData, 33,
+                (ItemPeriodType.None, 0), (ItemPeriodType.Days, 7)));
+            _ctx.GameData.GetShopItem(gun).ItemInfos.Single().PriceGroup.Prices
+                .Single(p => p.PeriodType == ItemPeriodType.None).IsEnabled = false;
+
+            var item = plr.Inventory.CreateFromShop(gun);
+
+            Assert.Equal(ItemPeriodType.None, item.PeriodType);
+        }
+
+        [Fact]
+        public async Task CreateFromShop_permanentRewardOfTimedOnlyItem_getsTheLongestPeriod()
+        {
+            var (plr, _) = await LoginWithCapsuleAsync(9312, withPen: false);
+            var gun = new ItemNumber(2000098u);
+            GameFixtures.SeedShopItem(_ctx.GameData, gun, GameFixtures.SeedPeriodPriceGroup(_ctx.GameData, 32,
+                (ItemPeriodType.Days, 1), (ItemPeriodType.Days, 30), (ItemPeriodType.Days, 7)));
+
+            var item = plr.Inventory.CreateFromShop(gun);
+
+            Assert.Equal((ItemPeriodType.Days, (ushort)30), (item.PeriodType, item.Period));
+        }
+
+        [Fact]
         public async Task Open_rewardNotInShop_keepsCapsule()
         {
             var (plr, _) = await LoginWithCapsuleAsync(9302, rewardInShop: false, withPen: false);
