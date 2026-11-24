@@ -45,16 +45,32 @@ namespace OpenS4L.Server.Mapping.Tests
                 src => _mapper.ToChangeRule2Dto((RoomCreationOptions)src));
         }
 
+        /// <summary>
+        /// Matches the legacy mapping except ExpireTime, which was latent bug #1 (README.md) and is now
+        /// fixed deliberately: the legacy result is patched to the value LegacyGameConfig meant to send
+        /// (the expiry as unix seconds), so every other member is still pinned to the legacy output.
+        /// </summary>
         [Fact]
-        public void PlayerItem_ToItemDto_Matches()
+        public void PlayerItem_ToItemDto_MatchesLegacyWithFixedExpireTime()
         {
             Register();
             var gds = GameFixtures.CreateGameDataService();
-            var item = GameFixtures.CreatePlayerItem(gds);
+            var item = GameFixtures.CreatePlayerItem(gds); // 30-day item bought at unix 1700000000
+
+            var legacy = ExpressMapper.Mapper.Map<PlayerItem, ItemDto>(item);
+            Assert.Equal(System.DateTimeOffset.MinValue, legacy.ExpireTime); // the bug that was fixed
+
             MappingAssert.Equal<ItemDto>(
                 item,
-                src => ExpressMapper.Mapper.Map<PlayerItem, ItemDto>((PlayerItem)src),
+                src =>
+                {
+                    var dto = ExpressMapper.Mapper.Map<PlayerItem, ItemDto>((PlayerItem)src);
+                    dto.ExpireTime = ((PlayerItem)src).ExpireDate;
+                    return dto;
+                },
                 src => _mapper.ToItemDto((PlayerItem)src));
+
+            Assert.Equal(1700000000L + 30 * 86400, _mapper.ToItemDto(item).ExpireTime.ToUnixTimeSeconds());
         }
     }
 }

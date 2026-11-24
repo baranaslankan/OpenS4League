@@ -93,7 +93,8 @@ namespace OpenS4L.Server.Mapping.Tests
 
             // Create a skill PlayerItem (Stash reflects the last-seeded shop item 3050001 = Skill)
             // and equip it.
-            var item = GameFixtures.CreatePlayerItem(_ctx.GameData);
+            // Bought now: the fixture item is a 30-day item, and expired items can't be equipped.
+            var item = GameFixtures.CreatePlayerItem(_ctx.GameData, DateTimeOffset.Now);
             Assert.Equal(ItemCategory.Skill, item.ItemNumber.Category);
 
             var equipErr = character.Equip(item, (byte)SkillSlot.Skill);

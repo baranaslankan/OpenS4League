@@ -20,6 +20,9 @@ namespace OpenS4L.Server.Game
         public TimeSpan SavePublishInterval { get; set; } = TimeSpan.FromMilliseconds(5000);
         public TimeSpan SaveFlushInterval { get; set; } = TimeSpan.FromMilliseconds(2000);
 
+        // How often online players' hour/day period items are checked for expiry (ms in config).
+        public TimeSpan ItemExpiryCheckInterval { get; set; } = TimeSpan.FromMilliseconds(60000);
+
         public GameOptions Game { get; set; }
     }
 }

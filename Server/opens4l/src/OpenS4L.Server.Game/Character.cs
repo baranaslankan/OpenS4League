@@ -97,6 +97,15 @@ namespace OpenS4L.Server.Game
                     return;
                 }
 
+                // A period item that ran out while the player was offline is no longer worn; the
+                // character is saved without it on the next write-behind cycle.
+                if (item.IsExpired)
+                {
+                    log.Information("Not equipping expired item ExpireDate={ExpireDate}", item.ExpireDate);
+                    SetDirtyState(true);
+                    return;
+                }
+
                 var error = characterInventory.Add(itemSlot, item);
                 if (error != CharacterInventoryError.OK)
                     log.Warning("Unable to equip item Error={Error}", error);
@@ -160,6 +169,9 @@ namespace OpenS4L.Server.Game
                 default:
                     return CharacterInventoryError.ItemNotAllowed;
             }
+
+            if (item.IsExpired)
+                return CharacterInventoryError.ItemNotAllowed;
 
             // Replace whatever already occupies the slot instead of failing outright. The
             // client's equip UI is a single click on the new item ("wear this") - it never
