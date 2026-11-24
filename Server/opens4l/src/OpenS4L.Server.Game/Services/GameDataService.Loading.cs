@@ -48,11 +48,14 @@ namespace OpenS4L.Server.Game.Services
             {
                 foreach (var mapDto in dto.map)
                 {
+                    // Keep the full id: the random placeholders (993-999) would collide with real
+                    // maps once truncated to a byte (999 -> 231 = Wonderland TD)
                     var map = new MapInfo
                     {
-                        Id = (byte)mapDto.id,
+                        Id = mapDto.id,
                         GameRule = (GameRule)mapDto.@base.mode_number,
-                        PlayerLimit = mapDto.@base.limit_player
+                        PlayerLimit = mapDto.@base.limit_player,
+                        IsRandom = IsRandomMapPlaceholder(mapDto)
                     };
 
                     if (!string.IsNullOrWhiteSpace(mapDto.@switch.eu) &&
@@ -79,6 +82,23 @@ namespace OpenS4L.Server.Game.Services
                     yield return map;
                 }
             }
+        }
+
+        /// <summary>
+        /// The client's map.x7 has "random" entries (999=DM, 998=TD, 997=Chaser, ...) that point to
+        /// bginfo-random.ini instead of a real map
+        /// </summary>
+        internal static bool IsRandomMapPlaceholder(MapListMapDto mapDto)
+        {
+            var bgInfo = mapDto.resourse?.bginfo_path;
+            if (!string.IsNullOrWhiteSpace(bgInfo) &&
+                bgInfo.EndsWith("bginfo-random.ini", StringComparison.InvariantCultureIgnoreCase))
+            {
+                return true;
+            }
+
+            // A map id that does not fit in a byte can't be sent to the client as a real map
+            return mapDto.id > byte.MaxValue;
         }
 
         public void LoadEffects()

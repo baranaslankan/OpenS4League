@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
@@ -65,6 +66,36 @@ namespace OpenS4L.Server.Game.Services
                        .FirstOrDefault(levelInfo => experience >= levelInfo.TotalExperience &&
                                                     experience < levelInfo.TotalExperience + levelInfo.ExperienceToNextLevel)
                    ?? Levels.Last().Value;
+        }
+
+        /// <summary>
+        /// Finds a map by the id the client sends (a byte) and the game rule.
+        /// The game rule is needed because the random placeholders collide with real maps once
+        /// truncated (999 -> 231). If no map matches the game rule, any map with the id is returned
+        /// so callers can still tell "invalid game rule" apart from "invalid map".
+        /// </summary>
+        public MapInfo GetMap(byte mapId, GameRule gameRule)
+        {
+            var maps = Maps.Where(x => x.WireId == mapId).ToArray();
+            return maps.Where(x => x.GameRule == gameRule).OrderBy(x => x.IsRandom).FirstOrDefault()
+                   ?? maps.OrderBy(x => x.IsRandom).FirstOrDefault();
+        }
+
+        /// <summary>
+        /// Picks a random enabled real map for the given game rule.
+        /// Maps that can hold <paramref name="playerLimit"/> players are preferred.
+        /// </summary>
+        /// <returns>null when there is no enabled map for the game rule</returns>
+        public MapInfo GetRandomMap(GameRule gameRule, int playerLimit = 0)
+        {
+            var maps = Maps
+                .Where(x => !x.IsRandom && x.IsEnabled && x.GameRule == gameRule && x.Id <= byte.MaxValue)
+                .ToArray();
+            var fitting = maps.Where(x => x.PlayerLimit >= playerLimit).ToArray();
+            if (fitting.Length > 0)
+                maps = fitting;
+
+            return maps.Length == 0 ? null : maps[Random.Shared.Next(maps.Length)];
         }
 
         public async Task StartAsync(CancellationToken cancellationToken)

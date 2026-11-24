@@ -123,7 +123,7 @@ namespace OpenS4L.Server.Game
             RoomManager = roomManager;
             Id = id;
             Options = options;
-            Map = _gameDataService.Maps.First(x => x.Id == options.Map);
+            Map = _gameDataService.GetMap(options.Map, options.GameRule);
             GameRule = _gameRuleResolver.CreateGameRule(Options);
             GameRule.Initialize(this);
             GameRule.StateMachine.GameStateChanged += OnGameStateChanged;
@@ -133,6 +133,9 @@ namespace OpenS4L.Server.Game
                 ("ChannelId", RoomManager.Channel.Id),
                 ("RoomId", Id)
             );
+
+            if (Options.IsRandomMap)
+                _logger.Debug("Random map resolved to {MapId} {Map}", Map.Id, Map.ToString());
         }
 
         public RoomJoinError Join(Player plr)
@@ -300,7 +303,7 @@ namespace OpenS4L.Server.Game
                 return RoomChangeRulesError.InvalidGameRule;
             }
 
-            var map = _gameDataService.Maps.FirstOrDefault(x => x.Id == options.Map);
+            var map = _gameDataService.GetMap(options.Map, options.GameRule);
             if (map == null)
                 return RoomChangeRulesError.InvalidMap;
 
@@ -310,11 +313,24 @@ namespace OpenS4L.Server.Game
             if (options.PlayerLimit + options.SpectatorLimit < Players.Count)
                 return RoomChangeRulesError.PlayerLimitTooLow;
 
+            // Same as room creation: a random map placeholder becomes a random real map and the
+            // real map id is what gets broadcast (RoomChangeRuleNotifyAck2/RoomChangeRuleAck)
+            var isRandomMap = map.IsRandom;
+            if (isRandomMap)
+            {
+                map = _gameDataService.GetRandomMap(options.GameRule, options.PlayerLimit);
+                if (map == null)
+                    return RoomChangeRulesError.InvalidMap;
+
+                _logger.Debug("Random map resolved to {MapId} {Map}", map.Id, map.ToString());
+            }
+
             IsChangingRules = true;
 
             Options.Name = options.Name;
             Options.GameRule = options.GameRule;
-            Options.Map = options.Map;
+            Options.Map = map.WireId;
+            Options.IsRandomMap = isRandomMap;
             Options.PlayerLimit = options.PlayerLimit;
             Options.SpectatorLimit = options.SpectatorLimit;
             Options.TimeLimit = options.TimeLimit;
@@ -326,7 +342,7 @@ namespace OpenS4L.Server.Game
             Broadcast(new RoomChangeRuleNotifyAck2Message(_mapper.ToChangeRule2Dto(Options)));
 
             GameRule.Cleanup();
-            Map = _gameDataService.Maps.First(x => x.Id == Options.Map);
+            Map = map;
             GameRule = _gameRuleResolver.CreateGameRule(Options);
             GameRule.Initialize(this);
             GameRule.StateMachine.GameStateChanged += OnGameStateChanged;
