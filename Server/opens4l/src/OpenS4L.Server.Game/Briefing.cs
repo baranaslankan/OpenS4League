@@ -79,6 +79,9 @@ namespace OpenS4L.Server.Game
         public uint BonusPENGained { get; set; }
         public bool LevelUp { get; set; }
 
+        /// <summary>Result bonus flags (see Serialize); 0 unless GameOptions.PENRewards.SendResultBonusFlags.</summary>
+        public int BonusFlags { get; set; }
+
         public virtual void Serialize(BinaryWriter w)
         {
             w.Write(AccountId);
@@ -104,7 +107,7 @@ namespace OpenS4L.Server.Game
                 16 25%
                 32 30%
             */
-            w.Write(0);
+            w.Write(BonusFlags);
             w.Write((byte)0);
             w.Write((byte)0);
             w.Write((byte)0);

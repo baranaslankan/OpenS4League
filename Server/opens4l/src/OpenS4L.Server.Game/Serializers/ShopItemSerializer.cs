@@ -43,7 +43,7 @@ namespace OpenS4L.Server.Game.Serializers
                 writer.Write((ushort)item.MinLevel);
                 writer.Write((ushort)item.MaxLevel);
                 writer.Write((ushort)item.MasterLevel);
-                writer.Write(0); // RepairCost
+                writer.Write(item.RepairCost);
                 writer.Write(item.IsOneTimeUse);
                 writer.Write(!item.IsDestroyable);
                 writer.Write((ushort)item.MainTab);

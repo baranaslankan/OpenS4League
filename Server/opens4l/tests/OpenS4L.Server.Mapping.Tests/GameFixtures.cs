@@ -224,6 +224,41 @@ namespace OpenS4L.Server.Mapping.Tests
             return id;
         }
 
+        /// <summary>Adds (or replaces) a price group with the given prices.</summary>
+        public static ShopPriceGroup SeedPriceGroup(GameDataService gds, int id, ItemPriceType priceType,
+            params ShopPriceEntity[] prices)
+        {
+            foreach (var price in prices)
+            {
+                price.PriceGroupId = id;
+                price.IsEnabled = true;
+            }
+
+            var group = new ShopPriceGroup(new ShopPriceGroupEntity
+            {
+                Id = id,
+                PriceType = (byte)priceType,
+                Name = "group" + id,
+                ShopPrices = prices.ToList()
+            });
+            Set(gds, "ShopPrices", gds.ShopPrices.SetItem(id, group));
+            return group;
+        }
+
+        /// <summary>Builds a PlayerItem of the given shop item info and price (not added to an inventory).</summary>
+        public static PlayerItem CreatePlayerItem(GameDataService gds, ShopItemInfo itemInfo, ShopPrice price,
+            DateTimeOffset purchaseDate)
+        {
+            var inventory = new PlayerInventory(
+                new Logger<PlayerInventory>(),
+                gds,
+                new OpenS4L.Common.IdGeneratorService(
+                    Microsoft.Extensions.Options.Options.Create(new OpenS4L.Common.Configuration.IdGeneratorOptions { Id = 1 })),
+                new OpenS4L.Server.Game.Mappers.GameMapper());
+
+            return new PlayerItem(gds, inventory, 9002, itemInfo, price, 0, Array.Empty<uint>(), purchaseDate);
+        }
+
         /// <summary>Builds a DefaultItem whose SubCategory encodes the costume slot.</summary>
         private static DefaultItem DefaultItem(uint id, CharacterGender gender, byte subCategory)
         {
@@ -263,6 +298,15 @@ namespace OpenS4L.Server.Mapping.Tests
         public static void SetMaps(GameDataService gds, params MapInfo[] maps)
         {
             Set(gds, "Maps", ImmutableArray.Create(maps));
+        }
+
+        /// <summary>Adds effect_list entries (the default fixture has none).</summary>
+        public static void AddEffects(GameDataService gds, params ItemEffect[] effects)
+        {
+            var dict = gds.Effects;
+            foreach (var effect in effects)
+                dict = dict.SetItem(effect.Id, effect);
+            Set(gds, "Effects", dict);
         }
 
         private static void Set(object obj, string prop, object value)

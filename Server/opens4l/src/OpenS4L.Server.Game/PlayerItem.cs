@@ -128,6 +128,51 @@ namespace OpenS4L.Server.Game
             return Effects.Select(x => _gameDataService.Effects.GetValueOrDefault(x)).ToArray();
         }
 
+        /// <summary>
+        /// Sum of the Rate (percent) of this item's effects of the given type.
+        /// </summary>
+        public float GetEffectRate(EffectType effectType)
+        {
+            return Effects
+                .Select(x => _gameDataService.Effects.GetValueOrDefault(x))
+                .Where(x => x != null && x.EffectType == effectType)
+                .Sum(x => x.Rate);
+        }
+
+        /// <summary>
+        /// The PEN bonus (percent) of a PEN Plus boost item, 0 for anything else.
+        /// Uses the item's effects; items without effects (the provisioned shop has a single empty
+        /// effect group) fall back to effect_list.x7, where PEN Plus 500000N carries effect
+        /// 1999801000+N (5000001 = 50%, 5000002 = 100%, 5000003..5000010 = 10..90%).
+        /// </summary>
+        public float GetPENBoostRate()
+        {
+            if (ItemNumber.Category != ItemCategory.Boost || ItemNumber.SubCategory != 0)
+                return 0;
+
+            var rate = GetEffectRate(EffectType.PENGain);
+            if (rate > 0 || Effects.Count > 0)
+                return rate;
+
+            var effect = _gameDataService.Effects.GetValueOrDefault(1999801000u + ItemNumber.Number);
+            return effect != null && effect.EffectType == EffectType.PENGain ? effect.Rate : 0;
+        }
+
+        public bool IsExpired()
+        {
+            switch (PeriodType)
+            {
+                case ItemPeriodType.Days:
+                    return ExpireDate < DateTimeOffset.Now;
+
+                case ItemPeriodType.Units:
+                    return Durability == 0;
+
+                default:
+                    return false;
+            }
+        }
+
         public ShopItem GetShopItem()
         {
             return _gameDataService.GetShopItem(ItemNumber);
@@ -159,16 +204,114 @@ namespace OpenS4L.Server.Game
             return loss;
         }
 
-        // TODO Calculate refund/repair cost
+        // Refund and repair mirror the client's own calculation (S4ClientLocal.exe 0.8.32.26995,
+        // item class around 0x1079b00/0x107a150) so the PEN the client shows in the resell/repair
+        // dialogs is what the server charges or pays.
 
+        /// <summary>
+        /// Resell value in PEN, as the client computes it:
+        /// - Days/Hours items: trunc(price * 0.2 * remaining / total) (remaining days from the
+        ///   expire date; Hours use Durability as remaining hours and Period as total)
+        /// - permanent costumes/weapons/skills: trunc(price * 0.15 + price * 0.1 * durability / maxDurability)
+        /// - permanent esper chips with durability: price
+        /// - per-unit items: price * units left / bundle size (the client shows price * units left;
+        ///   the division is server-side only so bundles can't refund more than they cost)
+        /// - anything else: 0
+        /// price is the shop price of this item's period with the item info's discount applied
+        /// (price * (100 + discount) / 100, the client skips it for price type 4).
+        /// </summary>
         public uint CalculateRefund()
         {
+            var shopItemInfo = GetShopItemInfo();
+            var shopPrice = shopItemInfo?.PriceGroup.GetPrice(PeriodType, Period);
+            if (shopPrice == null)
+                return 0;
+
+            var price = (long)shopPrice.Price;
+            if (PriceType != ItemPriceType.None)
+                price = ((short)shopItemInfo.Discount + 100) * price / 100;
+
+            if (price <= 0)
+                return 0;
+
+            var total = 0.0;
+            if (PeriodType == ItemPeriodType.Hours || PeriodType == ItemPeriodType.Days)
+                total = Period;
+
+            if (total != 0)
+            {
+                var remaining = PeriodType == ItemPeriodType.Hours
+                    ? Durability
+                    : (ExpireDate - DateTimeOffset.Now).TotalDays;
+                if (remaining < 0)
+                    remaining = total;
+
+                return ToUInt(price * 0.2 * (remaining / total));
+            }
+
+            var maxDurability = PeriodType == ItemPeriodType.None ? shopPrice.Durability : -1;
+            var category = ItemNumber.Category;
+            if (category == ItemCategory.Costume || category == ItemCategory.Weapon || category == ItemCategory.Skill ||
+                category == ItemCategory.EsperChip && maxDurability > 0)
+            {
+                if (category == ItemCategory.EsperChip)
+                    return ToUInt(price);
+
+                return ToUInt(price * 0.15 + price * 0.1 * ((double)Durability / maxDurability));
+            }
+
+            // The client shows price * units left. A unit price is the price of the whole bundle
+            // (Period units), so pay per unit left to keep bundles from refunding more than they
+            // cost. Same as the client for single-unit prices.
+            if (PeriodType == ItemPeriodType.Units)
+                return ToUInt(price * (double)Math.Min(Durability, Math.Max(1, (int)Period)) / Math.Max(1, (int)Period));
+
             return 0;
         }
 
+        /// <summary>
+        /// Repair cost in PEN for the lost durability, as the client computes it (EU branch):
+        /// - only permanent items; lost = maxDurability - durability
+        /// - costumes: ceil(repairCost * 0.75 * lost / maxDurability), where repairCost is the shop
+        ///   list's RepairCost field (ShopItem.RepairCost, currently always 0, so costumes repair for free)
+        /// - everything else: trunc(lost * 1.904762)
+        /// - the result is halved (integer shift)
+        /// </summary>
         public uint CalculateRepair()
         {
-            return 0;
+            if (PeriodType != ItemPeriodType.None || Durability == -1)
+                return 0;
+
+            var shopPrice = GetShopPrice();
+            if (shopPrice == null || shopPrice.Durability <= 0)
+                return 0;
+
+            var maxDurability = shopPrice.Durability;
+            var lost = maxDurability - Durability;
+            if (lost <= 0)
+                return 0;
+
+            uint cost;
+            if (ItemNumber.Category == ItemCategory.Costume)
+            {
+                var repairCost = (uint)Math.Max(0, GetShopItem()?.RepairCost ?? 0);
+                var ratio = (float)lost / maxDurability;
+                cost = ToUInt(Math.Ceiling((double)((float)repairCost * 0.75f * ratio)));
+            }
+            else
+            {
+                cost = (uint)(int)(lost * 1.904762f);
+            }
+
+            return cost >> 1;
+        }
+
+        private static uint ToUInt(double value)
+        {
+            if (value <= 0 || double.IsNaN(value))
+                return 0;
+
+            return value >= uint.MaxValue ? uint.MaxValue : (uint)value;
         }
     }
 }
