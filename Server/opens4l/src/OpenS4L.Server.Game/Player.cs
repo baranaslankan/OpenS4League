@@ -402,13 +402,7 @@ namespace OpenS4L.Server.Game
             // it, the client assumes the player owns no licenses and refuses to enter any
             // channel. The reference stack shipped with EnableLicenseRequirement:false and
             // effectively granted all licenses — mirror that by sending every license.
-            Session.Send(new LicenseMyInfoAckMessage(
-                Enum.GetValues(typeof(ItemLicense))
-                    .Cast<ItemLicense>()
-                    .Where(x => x != ItemLicense.None)
-                    .Select(x => (uint)x)
-                    .ToArray()
-            ));
+            SendLicenses();
 
             Session.Send(new PlayerAccountInfoAckMessage(CreateAccountInfoDto()));
 
@@ -439,6 +433,21 @@ namespace OpenS4L.Server.Game
                 State = ClanMember?.State ?? ClubMemberState.None,
                 Role = ClanMember?.Role ?? ClubRole.Normal
             });
+        }
+
+        /// <summary>Every license is granted (no license progress is stored), see SendAccountInformation.</summary>
+        public static uint[] GetLicenses()
+        {
+            return Enum.GetValues(typeof(ItemLicense))
+                .Cast<ItemLicense>()
+                .Where(x => x != ItemLicense.None)
+                .Select(x => (uint)x)
+                .ToArray();
+        }
+
+        public void SendLicenses()
+        {
+            Session.Send(new LicenseMyInfoAckMessage(GetLicenses()));
         }
 
         public void SendMoneyUpdate()
