@@ -121,7 +121,7 @@ namespace OpenS4L.Server.Game.GameRules
 
         protected override (uint baseGain, uint bonusGain) CalculatePENGained(Player plr)
         {
-            return (0, 0);
+            return CalculatePENGained(plr, _options.PENRates);
         }
 
         protected internal override void OnScoreKill(ScoreContext killer, ScoreContext assist, ScoreContext target,

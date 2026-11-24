@@ -116,6 +116,51 @@ namespace OpenS4L.Server.Game
             return Effects.Select(x => _gameDataService.Effects.GetValueOrDefault(x)).ToArray();
         }
 
+        /// <summary>
+        /// Sum of the Rate (percent) of this item's effects of the given type.
+        /// </summary>
+        public float GetEffectRate(EffectType effectType)
+        {
+            return Effects
+                .Select(x => _gameDataService.Effects.GetValueOrDefault(x))
+                .Where(x => x != null && x.EffectType == effectType)
+                .Sum(x => x.Rate);
+        }
+
+        /// <summary>
+        /// The PEN bonus (percent) of a PEN Plus boost item, 0 for anything else.
+        /// Uses the item's effects; items without effects (the provisioned shop has a single empty
+        /// effect group) fall back to effect_list.x7, where PEN Plus 500000N carries effect
+        /// 1999801000+N (5000001 = 50%, 5000002 = 100%, 5000003..5000010 = 10..90%).
+        /// </summary>
+        public float GetPENBoostRate()
+        {
+            if (ItemNumber.Category != ItemCategory.Boost || ItemNumber.SubCategory != 0)
+                return 0;
+
+            var rate = GetEffectRate(EffectType.PENGain);
+            if (rate > 0 || Effects.Count > 0)
+                return rate;
+
+            var effect = _gameDataService.Effects.GetValueOrDefault(1999801000u + ItemNumber.Number);
+            return effect != null && effect.EffectType == EffectType.PENGain ? effect.Rate : 0;
+        }
+
+        public bool IsExpired()
+        {
+            switch (PeriodType)
+            {
+                case ItemPeriodType.Days:
+                    return ExpireDate < DateTimeOffset.Now;
+
+                case ItemPeriodType.Units:
+                    return Durability == 0;
+
+                default:
+                    return false;
+            }
+        }
+
         public ShopItem GetShopItem()
         {
             return _gameDataService.GetShopItem(ItemNumber);

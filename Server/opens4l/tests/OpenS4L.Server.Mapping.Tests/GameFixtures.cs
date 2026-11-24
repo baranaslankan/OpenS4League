@@ -239,6 +239,15 @@ namespace OpenS4L.Server.Mapping.Tests
             Set(gds, "Maps", ImmutableArray.Create(maps));
         }
 
+        /// <summary>Adds effect_list entries (the default fixture has none).</summary>
+        public static void AddEffects(GameDataService gds, params ItemEffect[] effects)
+        {
+            var dict = gds.Effects;
+            foreach (var effect in effects)
+                dict = dict.SetItem(effect.Id, effect);
+            Set(gds, "Effects", dict);
+        }
+
         private static void Set(object obj, string prop, object value)
         {
             var p = obj.GetType().GetProperty(prop, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);

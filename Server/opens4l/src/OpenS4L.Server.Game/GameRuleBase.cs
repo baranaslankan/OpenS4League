@@ -84,6 +84,8 @@ namespace OpenS4L.Server.Game
                 briefingPlayer.BonusExperienceGained = bonusExpGain;
                 briefingPlayer.PENGained = penGain;
                 briefingPlayer.BonusPENGained = bonusPENGain;
+                if (_gameOptions.PENRewards?.SendResultBonusFlags == true && penGain > 0)
+                    briefingPlayer.BonusFlags = GetResultBonusFlags(plr);
 
                 if (expGain > 0)
                 {
@@ -203,6 +205,89 @@ namespace OpenS4L.Server.Game
         protected abstract (uint baseGain, uint bonusGain) CalculateExperienceGained(Player plr);
 
         protected abstract (uint baseGain, uint bonusGain) CalculatePENGained(Player plr);
+
+        /// <summary>
+        /// Match PEN from the point_bonus.x7 rates of a mode:
+        ///   base  = minutes * PointsPerMinute * (1 + score * ScoreFactor + players * PlayerCountFactor) * Multiplier
+        ///   bonus = base * (level bonus % + best owned PEN Plus boost %) / 100
+        /// Both are truncated. players = everyone still playing the match (spectators excluded).
+        /// </summary>
+        protected (uint baseGain, uint bonusGain) CalculatePENGained(Player plr, PENRateOptions rates)
+        {
+            if (rates == null)
+                return (0, 0);
+
+            var options = _gameOptions.PENRewards ?? new PENRewardOptions();
+            var basePEN = CalculateBasePEN(
+                plr.GetCurrentPlayTime().TotalMinutes,
+                plr.Score.GetTotalScore(),
+                TeamManager.PlayersPlaying.Count(),
+                rates,
+                options.Multiplier);
+            if (basePEN <= 0)
+                return (0, 0);
+
+            var bonusPercent = GetLevelBonus(options, plr.Level)?.Percent ?? 0;
+            if (options.EnableBoostItems)
+                bonusPercent += GetPENBoostRate(plr);
+
+            var bonusPEN = basePEN * bonusPercent / 100;
+            return ((uint)basePEN, bonusPEN > 0 ? (uint)bonusPEN : 0);
+        }
+
+        public static double CalculateBasePEN(double minutes, uint score, int playerCount, PENRateOptions rates,
+            float multiplier)
+        {
+            if (minutes <= 0)
+                return 0;
+
+            var factor = 1 + score * (double)rates.ScoreFactor + playerCount * (double)rates.PlayerCountFactor;
+            var pen = minutes * rates.PointsPerMinute * factor * multiplier;
+            return pen > uint.MaxValue ? uint.MaxValue : pen;
+        }
+
+        public static PENLevelBonusOptions GetLevelBonus(PENRewardOptions options, int level)
+        {
+            if (options == null || !options.EnableLevelBonus)
+                return null;
+
+            var tiers = options.LevelBonuses ?? PENRewardOptions.DefaultLevelBonuses;
+            return tiers.FirstOrDefault(x => x != null && level >= x.MinLevel && level <= x.MaxLevel);
+        }
+
+        /// <summary>
+        /// The best PEN Plus rate among the boost items the player owns. Boosts don't stack (assumed;
+        /// the client has no boost slot, so owning a non-expired one counts as wearing it).
+        /// </summary>
+        public static float GetPENBoostRate(Player plr)
+        {
+            var best = 0f;
+            foreach (var item in plr.Inventory)
+            {
+                if (item.ItemNumber.Category != ItemCategory.Boost || item.IsExpired())
+                    continue;
+
+                var rate = item.GetPENBoostRate();
+                if (rate > best)
+                    best = rate;
+            }
+
+            return best;
+        }
+
+        private int GetResultBonusFlags(Player plr)
+        {
+            var flags = 0;
+            var options = _gameOptions.PENRewards;
+            if (options.EnableBoostItems && GetPENBoostRate(plr) > 0)
+                flags |= 2;
+
+            var levelBonus = GetLevelBonus(options, plr.Level);
+            if (levelBonus != null)
+                flags |= levelBonus.ResultFlag;
+
+            return flags;
+        }
 
         private bool _CanStartGame()
         {
