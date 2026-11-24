@@ -158,19 +158,10 @@ namespace OpenS4L.Server.Game
             return effect != null && effect.EffectType == EffectType.PENGain ? effect.Rate : 0;
         }
 
-        public bool IsExpired()
+        /// <summary>Expired by date, or a per-unit item with no units left.</summary>
+        public bool IsExpiredOrUsedUp()
         {
-            switch (PeriodType)
-            {
-                case ItemPeriodType.Days:
-                    return ExpireDate < DateTimeOffset.Now;
-
-                case ItemPeriodType.Units:
-                    return Durability == 0;
-
-                default:
-                    return false;
-            }
+            return IsExpired || (PeriodType == ItemPeriodType.Units && Durability == 0);
         }
 
         public ShopItem GetShopItem()

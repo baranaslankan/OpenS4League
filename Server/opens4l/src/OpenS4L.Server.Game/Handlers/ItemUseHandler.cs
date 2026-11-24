@@ -69,7 +69,7 @@ namespace OpenS4L.Server.Game.Handlers
             var logger = plr.AddContextToLogger(_logger);
             var item = plr.Inventory[message.ItemId];
 
-            if (item == null || item.IsExpired() || !ChangeNickItems.TryGetValue(item.ItemNumber, out var days))
+            if (item == null || item.IsExpiredOrUsedUp() || !ChangeNickItems.TryGetValue(item.ItemNumber, out var days))
             {
                 logger.Warning("Item={ItemId} is not a nickname change item", message.ItemId);
                 session.Send(ChangeNickAck(ResultFailed, message.ItemId, message.Nickname));
@@ -118,7 +118,7 @@ namespace OpenS4L.Server.Game.Handlers
             var logger = plr.AddContextToLogger(_logger);
 
             // The request carries no item id, use the first cancel item in the inventory
-            var item = plr.Inventory.FirstOrDefault(x => ChangeNickCancelItems.Contains(x.ItemNumber) && !x.IsExpired());
+            var item = plr.Inventory.FirstOrDefault(x => ChangeNickCancelItems.Contains(x.ItemNumber) && !x.IsExpiredOrUsedUp());
             if (item == null)
             {
                 logger.Warning("No nickname change cancel item");
@@ -151,7 +151,7 @@ namespace OpenS4L.Server.Game.Handlers
             var logger = plr.AddContextToLogger(_logger);
             var item = plr.Inventory[message.ItemId];
 
-            if (item == null || item.IsExpired() || item.ItemNumber != RecordResetItem)
+            if (item == null || item.IsExpiredOrUsedUp() || item.ItemNumber != RecordResetItem)
             {
                 logger.Warning("Item={ItemId} is not a record reset item", message.ItemId);
                 session.Send(new ItemUseRecordResetAckMessage { Result = ResultFailed, Unk2 = message.ItemId });

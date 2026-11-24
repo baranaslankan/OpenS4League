@@ -264,7 +264,7 @@ namespace OpenS4L.Server.Game
             var best = 0f;
             foreach (var item in plr.Inventory)
             {
-                if (item.ItemNumber.Category != ItemCategory.Boost || item.IsExpired())
+                if (item.ItemNumber.Category != ItemCategory.Boost || item.IsExpiredOrUsedUp())
                     continue;
 
                 var rate = item.GetPENBoostRate();
