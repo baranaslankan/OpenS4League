@@ -786,6 +786,63 @@ namespace OpenS4L.Server.Mapping.Tests
                 m => m.ItemId == booster.Id);
         }
 
+        private static CapsuleInfo BoosterCapsule() => new CapsuleInfo
+        {
+            ItemNumber = new ItemNumber(4035266u),
+            Groups =
+            {
+                new CapsuleRewardGroup
+                {
+                    Rewards = Enumerable.Range(1, 6).Select(n => new CapsuleRewardInfo
+                    {
+                        Type = CapsuleRewardType.Item, ItemNumber = new ItemNumber((uint)(5040000 + n)), PeriodType = ItemPeriodType.None
+                    }).ToList()
+                }
+            }
+        };
+
+        [Fact]
+        public void ApplyBoosterRewards_givesDayBoostersAndAOneUse100_with100Rarest()
+        {
+            var capsule = BoosterCapsule();
+
+            CapsuleDataParser.ApplyBoosterRewards(capsule);
+
+            var rewards = capsule.Groups[0].Rewards;
+            Assert.All(rewards.Take(5), r => Assert.Equal((ItemPeriodType.Days, (ushort)1), (r.PeriodType, r.Period)));
+            Assert.Equal((ItemPeriodType.Units, (ushort)1), (rewards[5].PeriodType, rewards[5].Period));
+            Assert.Equal(new uint[] { 3000, 2500, 2000, 1200, 800, 500 }, rewards.Select(r => r.Rate));
+        }
+
+        [Fact]
+        public void IsBoosterExempt_boosterAndSkillCapsules_butNotOthers()
+        {
+            Assert.True(CapsuleOpener.IsBoosterExempt(BoosterCapsule(), null));
+            var skill = new CapsuleInfo { Groups = { new CapsuleRewardGroup { Rewards = { new CapsuleRewardInfo { Type = CapsuleRewardType.Item, ItemNumber = new ItemNumber(3010002u) } } } } };
+            Assert.True(CapsuleOpener.IsBoosterExempt(skill, null));
+            var weapon = new CapsuleInfo { Groups = { new CapsuleRewardGroup { Rewards = { new CapsuleRewardInfo { Type = CapsuleRewardType.Item, ItemNumber = Gun } } } } };
+            Assert.False(CapsuleOpener.IsBoosterExempt(weapon, null));
+        }
+
+        [Fact]
+        public async Task Open_exemptCapsule_keepsTheBooster()
+        {
+            var (plr, _) = await LoginWithCapsuleAsync(9321, withPen: false);
+            var booster = GiveBooster(plr, 44);
+            plr.EquippedBoosts.Add(booster.Id);
+            // The capsule now gives a booster only, so the switched-on booster must not be used.
+            _ctx.GameData.Capsules[Capsule].Groups[0].Rewards[0] = new CapsuleRewardInfo
+            {
+                Type = CapsuleRewardType.Item, ItemNumber = FullBooster, PeriodType = ItemPeriodType.Units, Period = 1
+            };
+            var capsule = plr.Inventory.First(x => x.ItemNumber == Capsule);
+
+            Assert.NotNull(CapsuleOpener.Open(plr, capsule, _ctx.GameData, new Random(1)));
+
+            Assert.Contains(booster.Id, plr.EquippedBoosts);
+            Assert.NotNull(plr.Inventory[booster.Id]);
+        }
+
         private async Task<(Player, FakeSocketChannel)> LoginWithCapsuleAsync(uint accountId, bool rewardInShop = true,
             bool withPen = true)
         {
