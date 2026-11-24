@@ -51,7 +51,8 @@ namespace OpenS4L.Server.Game
                     continue;
                 }
 
-                var item = plr.Inventory.CreateFromShop(reward.ItemNumber, reward.PeriodType, reward.Period, reward.Color);
+                var item = plr.Inventory.CreateFromShop(reward.ItemNumber, reward.PeriodType, reward.Period, reward.Color,
+                    reward.Effects);
                 if (item == null)
                     continue;
 

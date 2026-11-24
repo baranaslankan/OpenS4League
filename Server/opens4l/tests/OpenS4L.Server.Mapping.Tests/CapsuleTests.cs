@@ -110,6 +110,36 @@ namespace OpenS4L.Server.Mapping.Tests
         }
 
         [Fact]
+        public void ParseTooltip_setBox_givesEveryPart()
+        {
+            var doc = XDocument.Parse(@"<x>
+  <item id=""4050160""><capsule_icon ID_1=""1021031"" ID_2=""1031031"" ID_3=""1041031"" ID_4="""" />
+    <capsule_slot slot_1="""" slot_2="""" slot_3="""" /></item>
+  <item id=""4160121""><capsule_icon ID_1=""4051954"" ID_2=""6000001"" />
+    <capsule_slot slot_1="""" slot_2="""" /></item>
+</x>");
+
+            var capsules = CapsuleDataParser.ParseTooltip(doc, new Dictionary<string, string>()).ToList();
+
+            var set = capsules.Single(c => c.ItemNumber.Id == 4050160);
+            Assert.Equal(3, set.Groups.Count);
+            Assert.All(set.Groups, g => Assert.Single(g.Rewards));
+            Assert.Single(capsules.Single(c => c.ItemNumber.Id == 4160121).Groups); // not a set: one draw
+        }
+
+        [Fact]
+        public void ParseRewardTable_readsEffects()
+        {
+            var doc = XDocument.Parse(@"<ItemReward><item Number=""4050123""><group>
+  <reward Type=""2"" Data=""1021018"" PeriodType=""3"" Value=""30"" Color=""1"" Effects=""01101301006"" Rate=""100"" />
+</group></item></ItemReward>");
+
+            var reward = CapsuleDataParser.ParseRewardTable(doc).Single().Groups[0].Rewards[0];
+
+            Assert.Equal(new uint[] { 1101301006 }, reward.Effects);
+        }
+
+        [Fact]
         public void ParseTooltip_penWithoutText_isSkipped()
         {
             var doc = XDocument.Parse(@"<x><item id=""1""><capsule_icon ID_1=""4040003"" /><capsule_info effect_key_1=""MISSING"" /></item></x>");

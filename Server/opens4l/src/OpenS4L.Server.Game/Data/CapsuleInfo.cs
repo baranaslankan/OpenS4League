@@ -44,6 +44,9 @@ namespace OpenS4L.Server.Game.Data
         public ushort Period { get; set; }
         public byte Color { get; set; }
 
+        /// <summary>Effects (stats) the reward comes with, from the reward table. Empty = the shop's.</summary>
+        public uint[] Effects { get; set; } = System.Array.Empty<uint>();
+
         /// <summary>Relative weight inside its group. 0 for every reward means equal odds.</summary>
         public uint Rate { get; set; }
     }

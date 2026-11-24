@@ -227,7 +227,7 @@ namespace OpenS4L.Server.Game
         /// Returns null when the item is not in the shop or has no enabled price.
         /// </summary>
         public PlayerItem CreateFromShop(ItemNumber itemNumber, ItemPeriodType periodType = ItemPeriodType.None,
-            ushort period = 0, byte color = 0)
+            ushort period = 0, byte color = 0, uint[] effects = null)
         {
             var shopItem = _gameDataService.GetShopItem(itemNumber);
             if (shopItem == null)
@@ -246,7 +246,8 @@ namespace OpenS4L.Server.Game
             if (choice.info == null)
                 return null;
 
-            var effects = choice.info.EffectGroup?.Effects.Select(x => x.Effect).Where(x => x != 0).ToArray()
+            if (effects == null || effects.Length == 0)
+                effects = choice.info.EffectGroup?.Effects.Select(x => x.Effect).Where(x => x != 0).ToArray()
                           ?? Array.Empty<uint>();
             return Create(choice.info, choice.price, color, effects);
         }

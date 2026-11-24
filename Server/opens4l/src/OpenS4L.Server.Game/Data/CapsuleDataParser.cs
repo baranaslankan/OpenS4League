@@ -52,6 +52,7 @@ namespace OpenS4L.Server.Game.Data
                                 PeriodType = (ItemPeriodType)UInt(reward, "PeriodType"),
                                 Period = (ushort)Math.Min(value, ushort.MaxValue),
                                 Color = (byte)Math.Min(UInt(reward, "Color"), byte.MaxValue),
+                                Effects = ParseEffects((string)reward.Attribute("Effects")),
                                 Rate = UInt(reward, "Rate")
                             });
                         }
@@ -81,7 +82,13 @@ namespace OpenS4L.Server.Game.Data
                 if (icons == null)
                     continue;
 
-                // Without a reward table the tooltip's slot numbers can't be trusted as groups: set
+                // Set boxes (item category 4, subcategory 5 = "Set") list their parts without slot
+                // numbers and give every part. Blank slots elsewhere are ordinary random capsules.
+                var slots = item.Element("capsule_slot");
+                var isSetBox = number / 10000 == 405 && (slots == null || !slots.Attributes()
+                    .Any(a => a.Name.LocalName.StartsWith("slot_") && uint.TryParse(a.Value.Trim(), out _)));
+
+                // Otherwise the tooltip's slot numbers can't be trusted as groups: set
                 // capsules list the top prize alone in slot 1 (in the reward tables it is a rare pick
                 // against a coupon) and often leave rewards without a slot. So one item is rolled from
                 // everything listed, and PEN, when listed, is rolled separately.
@@ -116,7 +123,10 @@ namespace OpenS4L.Server.Game.Data
                     (reward.Type == CapsuleRewardType.PEN ? pens : items).Rewards.Add(reward);
                 }
 
-                var groups = new[] { items, pens }.Where(g => g.Rewards.Count > 0).ToList();
+                var groups = isSetBox
+                    ? items.Rewards.Concat(pens.Rewards)
+                        .Select(r => new CapsuleRewardGroup { Rewards = { r } }).ToList()
+                    : new[] { items, pens }.Where(g => g.Rewards.Count > 0).ToList();
                 if (groups.Count > 0)
                     yield return new CapsuleInfo
                     {
@@ -139,6 +149,15 @@ namespace OpenS4L.Server.Game.Data
             min = numbers.Min();
             max = numbers.Max();
             return true;
+        }
+
+        /// <summary>Reads an Effects attribute such as "12002" or "1104300008 01101301006" (0 = none).</summary>
+        public static uint[] ParseEffects(string text)
+        {
+            return Regex.Matches(text ?? "", @"\d+")
+                .Select(m => uint.TryParse(m.Value, NumberStyles.None, CultureInfo.InvariantCulture, out var v) ? v : 0)
+                .Where(v => v != 0)
+                .ToArray();
         }
 
         private static uint UInt(XElement e, string name)
