@@ -51,8 +51,9 @@ namespace OpenS4L.Server.Game
                     continue;
                 }
 
-                var item = plr.Inventory.CreateFromShop(reward.ItemNumber, reward.PeriodType, reward.Period, reward.Color,
-                    reward.Effects);
+                var (periodType, period, effects, noEffects) = Resolve(reward, random);
+                var item = plr.Inventory.CreateFromShop(reward.ItemNumber, periodType, period, reward.Color, effects,
+                    noEffects);
                 if (item == null)
                     continue;
 
@@ -72,6 +73,42 @@ namespace OpenS4L.Server.Game
                 plr.SendMoneyUpdate();
 
             return result.ToArray();
+        }
+
+        /// <summary>
+        /// The period and effects a rolled item reward comes with: one of its tooltip options (by
+        /// weight) when it has any, else its own. An option without effect ids keeps the reward's
+        /// own effects (reward table), and with none of those the shop's.
+        /// </summary>
+        public static (ItemPeriodType PeriodType, ushort Period, uint[] Effects, bool NoEffects) Resolve(
+            CapsuleRewardInfo reward, Random random)
+        {
+            if (reward.Options.Count == 0)
+                return (reward.PeriodType, reward.Period, reward.Effects, false);
+
+            var option = reward.Options[reward.Options.Count - 1];
+            var total = reward.Options.Sum(x => (long)x.Weight);
+            if (total > 0)
+            {
+                var pick = random.NextInt64(total);
+                foreach (var o in reward.Options)
+                {
+                    pick -= o.Weight;
+                    if (pick < 0)
+                    {
+                        option = o;
+                        break;
+                    }
+                }
+            }
+            else
+            {
+                option = reward.Options[random.Next(reward.Options.Count)];
+            }
+
+            if (option.NoEffects)
+                return (option.PeriodType, option.Period, Array.Empty<uint>(), true);
+            return (option.PeriodType, option.Period, option.Effects.Length > 0 ? option.Effects : reward.Effects, false);
         }
 
         /// <summary>Weighted pick by Rate; equal odds when no reward in the group has a rate.</summary>

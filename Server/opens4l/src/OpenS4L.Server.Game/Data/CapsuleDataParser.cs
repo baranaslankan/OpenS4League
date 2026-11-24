@@ -119,6 +119,12 @@ namespace OpenS4L.Server.Game.Data
                             PeriodType = ItemPeriodType.None,
                             Color = color
                         };
+
+                        // The slot text says which periods and stats the reward came with. A set
+                        // box's text ("(Jacket, Pants, ...)-30DAY") describes its parts, not the box.
+                        var key = (string)infos?.Attribute("effect_key_" + i) ?? "";
+                        if (!IsSetBox(reward.ItemNumber) && strings.TryGetValue(key, out var text))
+                            reward.Options = BuildOptions(CapsuleTooltipText.Parse(text), ItemPeriodType.None, 0);
                     }
 
                     (reward.Type == CapsuleRewardType.PEN ? pens : items).Rewards.Add(reward);
@@ -153,6 +159,112 @@ namespace OpenS4L.Server.Game.Data
                     {
                         ItemNumber = new ItemNumber(number), Source = CapsuleSource.Tooltip, Groups = groups
                     };
+            }
+        }
+
+        private static bool IsSetBox(ItemNumber item) => item.Id / 10000 == 405;
+
+        /// <summary>
+        /// Turns the tooltip's options for one reward into weighted reward options. Options without
+        /// a period keep <paramref name="periodType"/>/<paramref name="period"/>. The tooltip gives no
+        /// odds between periods, so shorter periods are favoured: with n periods, the shortest
+        /// weighs n, the next n - 1, ..., the longest (permanent last) 1. Same for unit counts.
+        /// </summary>
+        public static IList<CapsuleRewardOption> BuildOptions(IEnumerable<CapsuleTooltipOption> options,
+            ItemPeriodType periodType, ushort period)
+        {
+            var distinct = new List<CapsuleRewardOption>();
+            foreach (var o in options)
+            {
+                var type = o.PeriodType ?? periodType;
+                var p = o.PeriodType.HasValue ? o.Period : period;
+                if (type == ItemPeriodType.None || type == 0)
+                    p = 0;
+                if (distinct.Any(x => x.PeriodType == type && x.Period == p))
+                    continue;
+                distinct.Add(new CapsuleRewardOption
+                {
+                    PeriodType = type, Period = p, Stats = o.Stats, StatText = o.StatText, NoEffects = o.NoStats,
+                    KeepsPeriod = !o.PeriodType.HasValue
+                });
+            }
+
+            var ordered = distinct.OrderBy(x => Length(x.PeriodType, x.Period)).ToList();
+            for (var i = 0; i < ordered.Count; ++i)
+                ordered[i].Weight = (uint)(ordered.Count - i);
+            return ordered;
+        }
+
+        private static long Length(ItemPeriodType type, ushort period) => type switch
+        {
+            ItemPeriodType.Hours => period,
+            ItemPeriodType.Days => period * 24L,
+            ItemPeriodType.Units => period,
+            _ => long.MaxValue
+        };
+
+        /// <summary>
+        /// Corrects a reward-table capsule with the client's tooltip for it. The reward table (no known
+        /// official source) keeps its rewards and odds, but where the tooltip lists periods or stats
+        /// for the same item it wins: a period the tooltip also lists is kept with the tooltip's stats
+        /// for it; a period the tooltip doesn't list is replaced by a roll over the tooltip's periods.
+        /// </summary>
+        /// <returns>How many rewards changed.</returns>
+        public static int ApplyTooltip(CapsuleInfo table, CapsuleInfo tooltip)
+        {
+            if (tooltip == null)
+                return 0;
+
+            var byItem = tooltip.Groups.SelectMany(g => g.Rewards)
+                .Where(r => r.Type == CapsuleRewardType.Item && r.Options.Count > 0)
+                .GroupBy(r => r.ItemNumber)
+                .ToDictionary(g => g.Key, g => g.First());
+
+            var changed = 0;
+            foreach (var reward in table.Groups.SelectMany(g => g.Rewards))
+            {
+                if (reward.Type != CapsuleRewardType.Item || !byItem.TryGetValue(reward.ItemNumber, out var tip))
+                    continue;
+
+                var type = reward.PeriodType == 0 ? ItemPeriodType.None : reward.PeriodType;
+                var period = type == ItemPeriodType.None ? (ushort)0 : reward.Period;
+                // Options without a period (stats only) take the table's period.
+                var options = tip.Options.Select(o => Copy(o, o.KeepsPeriod ? type : o.PeriodType,
+                    o.KeepsPeriod ? period : o.Period)).ToList();
+                var same = options.Where(o => o.PeriodType == type && o.Period == period).ToList();
+                reward.Options = same.Count > 0 ? new List<CapsuleRewardOption> { same[0] } : options;
+                ++changed;
+            }
+
+            return changed;
+        }
+
+        private static CapsuleRewardOption Copy(CapsuleRewardOption o, ItemPeriodType type, ushort period) =>
+            new CapsuleRewardOption
+            {
+                PeriodType = type, Period = type == ItemPeriodType.None ? (ushort)0 : period, Stats = o.Stats,
+                StatText = o.StatText, Effects = o.Effects, NoEffects = o.NoEffects, Weight = o.Weight,
+                KeepsPeriod = o.KeepsPeriod
+            };
+
+        /// <summary>
+        /// Fills every option's effect ids from its stats. Options whose stats can't be matched keep
+        /// no ids (the reward's own effects, else the shop's) and are passed to <paramref name="unmapped"/>.
+        /// </summary>
+        public static void ResolveEffects(CapsuleInfo capsule, CapsuleEffectResolver resolver,
+            Action<CapsuleRewardInfo, CapsuleRewardOption> unmapped)
+        {
+            foreach (var reward in capsule.Groups.SelectMany(g => g.Rewards))
+            {
+                foreach (var option in reward.Options)
+                {
+                    if (option.NoEffects || option.Stats.Count == 0)
+                        continue;
+                    var ids = resolver.Resolve(reward.ItemNumber, option.Stats);
+                    if (ids == null)
+                        unmapped?.Invoke(reward, option);
+                    option.Effects = ids ?? Array.Empty<uint>();
+                }
             }
         }
 
@@ -234,6 +346,14 @@ namespace OpenS4L.Server.Game.Data
             {
                 if (reward.Type != CapsuleRewardType.Item)
                     continue;
+
+                // the tooltip's options for a part: the box decides how long it lasts
+                foreach (var option in reward.Options.Where(o => o.PeriodType == ItemPeriodType.None || o.PeriodType == 0))
+                {
+                    option.PeriodType = periodType;
+                    option.Period = period;
+                }
+
                 if (reward.PeriodType != ItemPeriodType.None && reward.PeriodType != 0)
                     continue;
 

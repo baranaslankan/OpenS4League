@@ -28,6 +28,10 @@ namespace OpenS4L.Server.Game.Services
         /// </summary>
         public ImmutableHashSet<uint> EffectMatches { get; private set; } = ImmutableHashSet<uint>.Empty;
 
+        /// <summary>English names of <see cref="EffectMatches"/> (e.g. 12002 "Attack+12%, EXP+5%").</summary>
+        public ImmutableDictionary<uint, string> EffectMatchNames { get; private set; } =
+            ImmutableDictionary<uint, string>.Empty;
+
         /// <summary>True for an effect id the client knows: a plain effect or an effect group.</summary>
         public bool IsKnownEffect(uint id) => Effects.ContainsKey(id) || EffectMatches.Contains(id);
         public ImmutableDictionary<ItemNumber, ItemInfo> Items { get; private set; }

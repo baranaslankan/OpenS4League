@@ -261,7 +261,7 @@ namespace OpenS4L.Server.Game
         /// Returns null when the item is not in the shop or has no enabled price.
         /// </summary>
         public PlayerItem CreateFromShop(ItemNumber itemNumber, ItemPeriodType periodType = ItemPeriodType.None,
-            ushort period = 0, byte color = 0, uint[] effects = null)
+            ushort period = 0, byte color = 0, uint[] effects = null, bool noEffects = false)
         {
             var shopItem = _gameDataService.GetShopItem(itemNumber);
             if (shopItem == null)
@@ -297,11 +297,21 @@ namespace OpenS4L.Server.Game
                 return null;
 
             // Ids the client doesn't know (neither an effect nor an effect group) fall back to the shop's.
-            effects = effects?.Where(x => _gameDataService.IsKnownEffect(x)).ToArray();
-            if (effects == null || effects.Length == 0)
-                effects = choice.info.EffectGroup?.Effects.Select(x => x.Effect).Where(x => x != 0).ToArray()
+            // Those come from the cash (AP) listing whatever price was picked: the PEN listing has the
+            // low PEN-shop stats (weapon Attack+1%), and rewards (capsules, set boxes) are the cash
+            // shop's items. A timed reward would otherwise land on the PEN listing's stats.
+            effects = noEffects ? Array.Empty<uint>() : effects?.Where(x => _gameDataService.IsKnownEffect(x)).ToArray();
+            if (!noEffects && (effects == null || effects.Length == 0))
+                effects = ShopEffects(shopItem.ItemInfos.FirstOrDefault(x => x.PriceGroup?.PriceType == ItemPriceType.AP))
+                          ?? ShopEffects(choice.info)
                           ?? Array.Empty<uint>();
             return Create(choice.info, choice.price, color, effects);
+        }
+
+        private static uint[] ShopEffects(ShopItemInfo info)
+        {
+            var effects = info?.EffectGroup?.Effects.Select(x => x.Effect).Where(x => x != 0).ToArray();
+            return effects == null || effects.Length == 0 ? null : effects;
         }
 
         private static bool IsTimed(ItemPeriodType type) => type == ItemPeriodType.Days || type == ItemPeriodType.Hours;

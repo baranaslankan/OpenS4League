@@ -402,6 +402,267 @@ namespace OpenS4L.Server.Mapping.Tests
             Assert.Equal(InventoryAction.Update, update.Action);
         }
 
+        // ---- tooltip text: periods and stats per reward ----
+
+        [Theory]
+        [InlineData("{N}HP +8 (1Day)", "3/1:hp+8")]
+        [InlineData("{N}HP +8(add exp +5%) (Permanent)", "1/0:exp+5,hp+8")]
+        [InlineData("{N}attack +10%(3, 10, 35Day)", "3/3:atk+10 3/10:atk+10 3/35:atk+10")]
+        [InlineData("{N}SP +6 (1, 7, 30Day/Permanent)", "3/1:sp+6 3/7:sp+6 3/30:sp+6 1/0:sp+6")]
+        [InlineData("{N}SP +6 (1Day, Permanent)", "3/1:sp+6 1/0:sp+6")]
+        [InlineData("Force Pack (7Day) attack +11%, move speed +3%, HP +5, SP +5", "3/7:atk+11,hp+5,sp+5,speed+3")]
+        [InlineData("{N}SP +6(1Day) or no stat(Permanent)", "3/1:sp+6 1/0:none")]
+        [InlineData("attack +8%(Permanent){N}, attack +10%(30Day)", "1/0:atk+8 3/30:atk+10")]
+        [InlineData("{N}no stat (1Day)", "3/1:none")]
+        [InlineData("{N}(Jacket, Pants, Gloves, Shoes, Hair)-30DAY", "3/30:")]
+        [InlineData("Smart Pack(1/7/30)Day SP +6, move speed +1%, all weapon depense +3%, EXP +20%",
+            "3/1:def+3,exp+20,sp+6,speed+1 3/7:def+3,exp+20,sp+6,speed+1 3/30:def+3,exp+20,sp+6,speed+1")]
+        [InlineData("{N}HP +8(EXP +5%) (10 hours)", "2/10:exp+5,hp+8")]
+        [InlineData("{N}shooting weapon defense(head) +15% (30Day)", "3/30:gundef+15")]
+        [InlineData("{N}Permanent SP +6, speed +1%", "1/0:sp+6,speed+1")]
+        [InlineData("{N}2/3/5", "4/2: 4/3: 4/5:")]
+        [InlineData("x15", "4/15:")]
+        [InlineData("{N}None Option", "-/0:none")]
+        [InlineData("{N}(Jacket, Pants, Gloves, Shoes, Acc)", "")]
+        [InlineData("PEN{N}1,000~100,000", "")]
+        public void TooltipText_readsPeriodsAndStats(string text, string expected)
+        {
+            var options = CapsuleTooltipText.Parse(text);
+
+            var actual = string.Join(" ", options.Select(o =>
+                $"{(o.PeriodType.HasValue ? ((int)o.PeriodType.Value).ToString() : "-")}/{o.Period}:" +
+                (o.NoStats ? "none" : CapsuleTooltipText.Key(o.Stats))));
+            Assert.Equal(expected, actual);
+        }
+
+        [Fact]
+        public void BuildOptions_favoursShorterPeriods()
+        {
+            var options = CapsuleDataParser.BuildOptions(
+                CapsuleTooltipText.Parse("{N}SP +6 (30Day, 1Day, Permanent, 7Day)"), ItemPeriodType.None, 0);
+
+            Assert.Equal(new[] { (ItemPeriodType.Days, (ushort)1, 4u), (ItemPeriodType.Days, (ushort)7, 3u),
+                    (ItemPeriodType.Days, (ushort)30, 2u), (ItemPeriodType.None, (ushort)0, 1u) },
+                options.Select(o => (o.PeriodType, o.Period, o.Weight)));
+        }
+
+        private static XDocument TooltipDoc(string id, params (uint item, string key)[] slots) => XDocument.Parse(
+            $@"<x><item id=""{id}""><capsule_icon {string.Join(" ", slots.Select((s, i) => $@"ID_{i + 1}=""{s.item}"""))} />
+<capsule_info {string.Join(" ", slots.Select((s, i) => $@"effect_key_{i + 1}=""{s.key}"""))} /></item></x>");
+
+        [Fact]
+        public void ParseTooltip_rewardGetsTheTooltipsPeriodsAndStats()
+        {
+            // Before the tooltip text was read every listed item was given permanent.
+            var doc = TooltipDoc("4030027", (2010001, "WEAPON_1_7_30"), (4050100, "SET_30"));
+            var strings = new Dictionary<string, string>
+            {
+                ["WEAPON_1_7_30"] = "{N}attack +10%(1, 7, 30Day)",
+                ["SET_30"] = "{N}(Jacket, Pants, Gloves, Shoes, Hair)-30DAY"
+            };
+
+            var rewards = CapsuleDataParser.ParseTooltip(doc, strings).Single().Groups.SelectMany(g => g.Rewards).ToList();
+
+            var weapon = rewards.Single(r => r.ItemNumber.Id == 2010001);
+            Assert.Equal(new ushort[] { 1, 7, 30 }, weapon.Options.Select(o => o.Period));
+            Assert.All(weapon.Options, o => Assert.Equal(ItemPeriodType.Days, o.PeriodType));
+            Assert.All(weapon.Options, o => Assert.Equal("atk+10", CapsuleTooltipText.Key(o.Stats)));
+            // a set box's text describes its parts: the box itself is unchanged
+            Assert.Empty(rewards.Single(r => r.ItemNumber.Id == 4050100).Options);
+        }
+
+        [Fact]
+        public void ApplyTooltip_keepsListedTablePeriodAndReplacesOthers()
+        {
+            var table = CapsuleDataParser.ParseRewardTable(XDocument.Parse(@"<ItemReward><item Number=""4030004""><group>
+  <reward Type=""2"" Data=""2010001"" PeriodType=""3"" Value=""10"" Effects=""1201300005"" Rate=""60"" />
+  <reward Type=""2"" Data=""2010002"" PeriodType=""1"" Value=""0"" Effects=""1201300005"" Rate=""40"" />
+</group></item></ItemReward>")).Single();
+            var strings = new Dictionary<string, string> { ["W"] = "{N}attack +10%(3, 10, 35Day)" };
+            var tooltip = CapsuleDataParser.ParseTooltip(TooltipDoc("4030004", (2010001, "W"), (2010002, "W")), strings).Single();
+
+            Assert.Equal(2, CapsuleDataParser.ApplyTooltip(table, tooltip));
+
+            var rewards = table.Groups[0].Rewards;
+            // the table's 10 days is one of the tooltip's periods: kept, with the tooltip's stat
+            var kept = Assert.Single(rewards[0].Options);
+            Assert.Equal((ItemPeriodType.Days, (ushort)10, "atk+10"), (kept.PeriodType, kept.Period, CapsuleTooltipText.Key(kept.Stats)));
+            // permanent is not: the tooltip's 3/10/35 days are rolled instead
+            Assert.Equal(new ushort[] { 3, 10, 35 }, rewards[1].Options.Select(o => o.Period));
+            // the table's odds stay
+            Assert.Equal(new uint[] { 60, 40 }, rewards.Select(r => r.Rate));
+        }
+
+        [Fact]
+        public void ApplyBoxPeriod_appliesToTooltipOptions()
+        {
+            var strings = new Dictionary<string, string> { ["P"] = "{N}HP +8(add exp +5%) (Permanent)" };
+            var capsule = CapsuleDataParser.ParseTooltip(TooltipDoc("4050099", (1041016, "P")), strings).Single();
+
+            CapsuleDataParser.ApplyBoxPeriod(capsule, "Gentle Hearts Set(30Days)");
+
+            var option = Assert.Single(capsule.Groups.Single().Rewards.Single().Options);
+            Assert.Equal((ItemPeriodType.Days, (ushort)30), (option.PeriodType, option.Period));
+        }
+
+        private static CapsuleEffectResolver Resolver()
+        {
+            var effects = new Dictionary<uint, string>
+            {
+                [1299600006] = "Attack+10%", [1299600007] = "Attack+11%", [1201300005] = "HP+5", [1201301005] = "SP+5",
+                [1299602002] = "Movement Speed+3%", [1104300008] = "HP+8", [1105300008] = "HP+8",
+                [1102303008] = "Attack+12%", [1102800001] = "EXP+5%", [1102303003] = "Attack+5%"
+            };
+            var groups = new Dictionary<uint, string>
+            {
+                [12002] = "Attack+12%, EXP+5%", [14002] = "HP+8, EXP+5%", [15002] = "HP+8, EXP+5%"
+            };
+            return new CapsuleEffectResolver(effects, groups);
+        }
+
+        private static uint[] Resolve(CapsuleEffectResolver r, uint item, string text) =>
+            r.Resolve(new ItemNumber(item), CapsuleTooltipText.ParseStats(text));
+
+        [Fact]
+        public void EffectResolver_mapsStatsToTheItemsCategory()
+        {
+            var r = Resolver();
+
+            // one effect of the item's category (pants 1040xxx = 1 1 04 ...; weapons use 99 = any)
+            Assert.Equal(new uint[] { 1104300008 }, Resolve(r, 1040015, "HP +8"));
+            Assert.Equal(new uint[] { 1105300008 }, Resolve(r, 1050015, "HP +8"));
+            Assert.Equal(new uint[] { 1299600006 }, Resolve(r, 2010001, "attack +10%"));
+            // an effect group for the category beats composing (12002 = tops, 14002 = pants)
+            Assert.Equal(new uint[] { 12002 }, Resolve(r, 1020015, "all weapon attack +12%(add exp +5%)"));
+            Assert.Equal(new uint[] { 14002 }, Resolve(r, 1040015, "HP +8(add exp +5%)"));
+            // a weapon Force Pack: one effect per stat
+            Assert.Equal(new uint[] { 1201300005, 1201301005, 1299600007, 1299602002 },
+                Resolve(r, 2010010, "attack +11%, move speed +3%, HP +5, SP +5"));
+            // no matching effect for the category
+            Assert.Null(Resolve(r, 1020015, "HP +8"));
+        }
+
+        [Fact]
+        public void EffectResolver_prefersWhatTheEuShopGaveTheItem()
+        {
+            var r = Resolver();
+            // the EU cash shop sold top 1020015 with Attack+12% + EXP+5% as plain effects
+            r.AddShopEffects(1020015, new[] { new uint[] { 1102303008, 1102800001 }, new uint[] { 1102303003 } });
+
+            Assert.Equal(new uint[] { 1102303008, 1102800001 }, Resolve(r, 1020015, "attack +12%(add exp +5%)"));
+            Assert.Equal(new uint[] { 1102303003 }, Resolve(r, 1020015, "attack +5%"));
+        }
+
+        [Fact]
+        public void ReadShopEffects_cashShopFirst()
+        {
+            var items = XDocument.Parse(@"<item_list><item key=""1020015"">
+  <shopinfo shop_id=""1"" effect_match=""1102303003"" price_group=""P"" />
+  <shopinfo shop_id=""3"" effect_match=""7012255"" price_group=""B"" />
+  <shopinfo shop_id=""4"" effect_match=""1"" /></item></item_list>");
+            var effects = XDocument.Parse(@"<effect_match_list><effect_match key=""7012255"">
+  <effects effect_id=""1102303008"" /><effects effect_id=""1102800001"" /></effect_match></effect_match_list>");
+
+            var sets = CapsuleEffectResolver.ReadShopEffects(items, effects)[1020015];
+
+            Assert.Equal(new uint[] { 1102303008, 1102800001 }, sets[0]);
+            Assert.Equal(new uint[] { 1102303003 }, sets.Last());
+        }
+
+        [Fact]
+        public void Resolve_rollsTheTooltipOptions()
+        {
+            var reward = new CapsuleRewardInfo
+            {
+                Type = CapsuleRewardType.Item, ItemNumber = Gun, Effects = new uint[] { 5 },
+                Options =
+                {
+                    new CapsuleRewardOption { PeriodType = ItemPeriodType.Days, Period = 1, Effects = new uint[] { 7 }, Weight = 2 },
+                    new CapsuleRewardOption { PeriodType = ItemPeriodType.None, NoEffects = true, Weight = 1 },
+                    new CapsuleRewardOption { PeriodType = ItemPeriodType.Days, Period = 30, Weight = 1 }
+                }
+            };
+            var random = new Random(5);
+
+            var rolls = Enumerable.Range(0, 400).Select(_ => CapsuleOpener.Resolve(reward, random)).ToList();
+
+            var day = rolls.Where(x => x.Period == 1).ToList();
+            Assert.All(day, x => Assert.Equal(new uint[] { 7 }, x.Effects));
+            // "no stat": no effects at all, not the shop's
+            Assert.All(rolls.Where(x => x.PeriodType == ItemPeriodType.None), x => Assert.True(x.NoEffects));
+            // an option without ids keeps the reward's own effects
+            Assert.All(rolls.Where(x => x.Period == 30), x => Assert.Equal(new uint[] { 5 }, x.Effects));
+            // weight 2 of 4: the shortest period is the most common
+            Assert.InRange(day.Count, 160, 240);
+        }
+
+        [Fact]
+        public async Task CreateFromShop_noEffects_givesNone()
+        {
+            var (plr, _) = await LoginWithCapsuleAsync(9314, withPen: false);
+
+            var item = plr.Inventory.CreateFromShop(Gun, noEffects: true);
+
+            Assert.Empty(item.Effects);
+        }
+
+        [Fact]
+        public async Task CreateFromShop_timedRewardWithoutEffects_getsTheCashListingsStats()
+        {
+            // Timed prices tie between the PEN and AP listings and the PEN one won, so a 7-day reward
+            // got the PEN shop's low stats (weapon Attack+1%) instead of the cash shop's (Attack+10%).
+            var (plr, _) = await LoginWithCapsuleAsync(9315, withPen: false);
+            var gun = new ItemNumber(2000096u);
+            GameFixtures.SeedShopItem(_ctx.GameData, gun, GameFixtures.SeedPeriodPriceGroup(_ctx.GameData, 34,
+                (ItemPeriodType.None, 0), (ItemPeriodType.Days, 7)));
+            var ap = GameFixtures.SeedPriceGroup(_ctx.GameData, 35, ItemPriceType.AP,
+                new ShopPriceEntity { Id = 3501, PeriodType = (byte)ItemPeriodType.None, Durability = 2400 },
+                new ShopPriceEntity { Id = 3502, PeriodType = (byte)ItemPeriodType.Days, Period = 7, Durability = 2400 });
+            var shopItem = _ctx.GameData.GetShopItem(gun);
+            var apInfo = new ShopItemInfo(shopItem, new ShopItemInfoEntity
+            {
+                Id = 99315, ShopItemId = gun.Id, PriceGroupId = ap.Id, EffectGroupId = 20, IsEnabled = true
+            }, _ctx.GameData)
+            {
+                EffectGroup = new ShopEffectGroup(new ShopEffectGroupEntity
+                {
+                    Id = 21, Name = "cash", PreviewEffect = 77,
+                    ShopEffects = new List<ShopEffectEntity> { new ShopEffectEntity { Id = 2, Effect = 77 } }
+                })
+            };
+            shopItem.ItemInfos.Add(apInfo);
+
+            var timed = plr.Inventory.CreateFromShop(gun, ItemPeriodType.Days, 7);
+            var permanent = plr.Inventory.CreateFromShop(gun);
+
+            Assert.Equal((ItemPeriodType.Days, (ushort)7), (timed.PeriodType, timed.Period));
+            Assert.Equal(new uint[] { 77 }, timed.Effects.ToArray());
+            Assert.Equal(new uint[] { 77 }, permanent.Effects.ToArray());
+        }
+
+        [Fact]
+        public async Task Open_tooltipOption_grantsItsPeriodAndStats()
+        {
+            var (plr, _) = await LoginWithCapsuleAsync(9316, withPen: false);
+            var gun = new ItemNumber(2000095u);
+            GameFixtures.SeedShopItem(_ctx.GameData, gun, GameFixtures.SeedPeriodPriceGroup(_ctx.GameData, 36,
+                (ItemPeriodType.None, 0), (ItemPeriodType.Days, 30)));
+            typeof(GameDataService).GetProperty(nameof(GameDataService.EffectMatches))
+                .SetValue(_ctx.GameData, ImmutableHashSet.Create<uint>(12002));
+            var info = _ctx.GameData.Capsules[Capsule];
+            info.Groups[0].Rewards[0] = new CapsuleRewardInfo
+            {
+                Type = CapsuleRewardType.Item, ItemNumber = gun, PeriodType = ItemPeriodType.None,
+                Options = { new CapsuleRewardOption { PeriodType = ItemPeriodType.Days, Period = 30, Effects = new uint[] { 12002 } } }
+            };
+            var capsule = plr.Inventory.First(x => x.ItemNumber == Capsule);
+
+            var reward = Assert.Single(CapsuleOpener.Open(plr, capsule, _ctx.GameData, new Random(1)));
+
+            Assert.Equal((ItemPeriodType.Days, (ushort)30, 12002u), (reward.PeriodType, reward.Period, reward.Effect));
+            Assert.Equal(new uint[] { 12002 }, plr.Inventory.Single(x => x.ItemNumber == gun).Effects.ToArray());
+        }
+
         private async Task<(Player, FakeSocketChannel)> LoginWithCapsuleAsync(uint accountId, bool rewardInShop = true,
             bool withPen = true)
         {
