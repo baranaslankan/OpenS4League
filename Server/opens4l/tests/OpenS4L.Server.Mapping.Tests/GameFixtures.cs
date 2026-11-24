@@ -167,7 +167,8 @@ namespace OpenS4L.Server.Mapping.Tests
         /// Seeds a shop item into the GameDataService so Inventory.Create can resolve it
         /// (the login flow's SendAccountInformation creates the slot-coupon item 6000015).
         /// </summary>
-        public static void SeedShopItem(GameDataService gds, ItemNumber itemNumber, int priceGroupId = 10)
+        public static void SeedShopItem(GameDataService gds, ItemNumber itemNumber, int priceGroupId = 10,
+            Gender gender = Gender.None)
         {
             var entity = new ShopItemInfoEntity
             {
@@ -178,11 +179,11 @@ namespace OpenS4L.Server.Mapping.Tests
             var shopItem = new ShopItem(new ShopItemEntity
             {
                 Id = itemNumber.Id,
-                RequiredGender = (byte)Gender.None,
+                RequiredGender = (byte)gender,
                 ItemInfos = new List<ShopItemInfoEntity> { entity }
             }, gds);
             var info = new ShopItemInfo(shopItem, entity, gds);
-            var itemInfo = new ItemInfo { ItemNumber = itemNumber, Name = "Coupon", Gender = Gender.None };
+            var itemInfo = new ItemInfo { ItemNumber = itemNumber, Name = "Coupon", Gender = gender };
 
             // Reflectively extend the collections.
             var items = gds.Items.Add(itemNumber, itemInfo);

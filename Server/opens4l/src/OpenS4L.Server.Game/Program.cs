@@ -172,6 +172,7 @@ namespace OpenS4L.Server.Game
                         .AddService<IdGeneratorService>()
                         .AddService<NicknameLookupService>()
                         .AddSingleton<Mappers.GameMapper>()
+                        .AddSingleton<RandomShopService>()
                         .AddHostedServiceEx<ServerlistService>()
                         .AddHostedServiceEx<GameDataService>()
                         .AddHostedServiceEx<ChannelService>()
