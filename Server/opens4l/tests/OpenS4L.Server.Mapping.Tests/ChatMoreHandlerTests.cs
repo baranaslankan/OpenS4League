@@ -202,6 +202,17 @@ namespace OpenS4L.Server.Mapping.Tests
         }
 
         [Fact]
+        public async Task UserData_offlineTarget_sendsNothing()
+        {
+            var (plr, channel) = await LoginAsync(7201, "self");
+
+            // Used to throw a NullReferenceException (target not online)
+            await _ctx.Get<UserDataHandler>().OnHandle(Ctx(plr), new UserDataOneReqMessage { AccountId = 424242 });
+
+            Assert.Null(FirstSent<UserDataFourAckMessage>(channel));
+        }
+
+        [Fact]
         public async Task UserData_ownAccount_sendsOwnData()
         {
             var (plr, channel) = await LoginAsync(7001, "self");

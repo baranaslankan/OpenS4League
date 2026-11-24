@@ -32,7 +32,8 @@ namespace OpenS4L.Server.Chat.Handlers
             }
 
             var target = _playerManager[message.AccountId];
-            if (plr.Channel != target.Channel)
+            // The target may be offline
+            if (target == null || plr.Channel != target.Channel)
                 return true;
 
             session.Send(new UserDataFourAckMessage(25, _mapper.ToUserDataDto(target)));
