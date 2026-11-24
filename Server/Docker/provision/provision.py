@@ -685,6 +685,9 @@ def apply_shop():
         for pid, ptype, period in cur.fetchall():
             old_prices[pid] = (ptype, period)
 
+        # Set period variants are hidden from the listing but stay in the shop data: capsules
+        # give them (e.g. a 30-day set box), and the game server only grants shop items.
+        keep |= {i for i, why in reasons.items() if why == "set period variant"}
         shop = {i: i not in reasons for i in items if i not in reasons or i in keep}
 
         # Price groups: one per distinct period signature; 1 = permanent and 2 = 1/2/5/10 units
@@ -774,7 +777,7 @@ def apply_shop():
             cur.execute("SET session_replication_role = 'origin'")
 
     listed = sum(shop.values())
-    print(f"[provision] shop: {listed} items listed, {len(shop) - listed} kept unlisted (owned/starter), "
+    print(f"[provision] shop: {listed} items listed, {len(shop) - listed} kept unlisted (owned/starter/set variants), "
           f"{len(sigs)} price groups, {len(group_of_preview)} effect groups"
           + (f" ({conflicts} preview clashes kept the first group)" if conflicts else "")
           + (f", reference covers {sum(1 for i in shop if i in ref)}" if ref else " (no reference shop)"))
