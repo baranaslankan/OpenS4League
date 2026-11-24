@@ -517,6 +517,7 @@ namespace OpenS4L.Server.Game.Services
                     unmapped[key] = unmapped.GetValueOrDefault(key) + 1;
                 });
                 CapsuleDataParser.ApplyBoxPeriod(capsule, Items.GetValueOrDefault(capsule.ItemNumber)?.Name);
+                CapsuleDataParser.ApplySetGrade(capsule, Items.GetValueOrDefault(capsule.ItemNumber)?.Name);
                 CapsuleDataParser.WeightSetBoxes(capsule, n => Items.GetValueOrDefault(n)?.Name);
             }
 

@@ -460,6 +460,48 @@ namespace OpenS4L.Server.Game.Data
         }
 
         /// <summary>
+        /// The Force Pack stat group per costume slot. These are ITEM_GRADE_UNIQUE in the client's
+        /// item_grade.x7, which shows the item with the orange tag; the cash shop's stats are RARE.
+        /// </summary>
+        public static readonly IReadOnlyDictionary<CostumeSlot, uint> CostumeForcePack = new Dictionary<CostumeSlot, uint>
+        {
+            [CostumeSlot.Hair] = 10002,     // Guns Def. (head)+15%, EXP+5%
+            [CostumeSlot.Shirt] = 12002,    // Attack+12%, EXP+5%
+            [CostumeSlot.Pants] = 13002,    // Defense+14%, EXP+5%
+            [CostumeSlot.Gloves] = 14002,   // HP+8, EXP+5%
+            [CostumeSlot.Shoes] = 15002,    // HP+8, EXP+5%
+            [CostumeSlot.Accessory] = 16002 // SP+8, EXP+5%
+        };
+
+        /// <summary>
+        /// Stats of a set box's costume parts: a permanent set (no period in its name) gives the
+        /// Force Pack group of each part's slot (orange tag), a timed set the cash shop's stats
+        /// (whatever the reward table says). Slots without a Force Pack group keep the shop's stats.
+        /// </summary>
+        public static void ApplySetGrade(CapsuleInfo capsule, string boxName)
+        {
+            if (capsule.ItemNumber.Id / 10000 != 405 || string.IsNullOrEmpty(boxName))
+                return;
+
+            var permanent = !TryParseBoxPeriod(boxName, out _, out _);
+            foreach (var reward in capsule.Groups.SelectMany(g => g.Rewards))
+            {
+                if (reward.Type != CapsuleRewardType.Item || reward.ItemNumber.Category != ItemCategory.Costume)
+                    continue;
+
+                var effects = permanent && CostumeForcePack.TryGetValue((CostumeSlot)reward.ItemNumber.SubCategory, out var fp)
+                    ? new[] { fp }
+                    : Array.Empty<uint>();
+                reward.Effects = effects;
+                foreach (var option in reward.Options)
+                {
+                    option.Effects = effects;
+                    option.NoEffects = false;
+                }
+            }
+        }
+
+        /// <summary>
         /// Timed set boxes (405xxxx named "(30Days)" etc.) give the same part numbers as the permanent
         /// box; only the box says how long they last. The reward table lists those parts as permanent,
         /// so the box name's period is applied to every permanent item reward.

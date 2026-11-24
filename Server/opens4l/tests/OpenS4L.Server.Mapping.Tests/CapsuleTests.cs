@@ -663,6 +663,37 @@ namespace OpenS4L.Server.Mapping.Tests
             Assert.Equal(new uint[] { 12002 }, plr.Inventory.Single(x => x.ItemNumber == gun).Effects.ToArray());
         }
 
+        private static CapsuleInfo SetBox(uint id, params uint[] parts) => new CapsuleInfo
+        {
+            ItemNumber = new ItemNumber(id),
+            Groups = parts.Select(p => new CapsuleRewardGroup
+            {
+                Rewards = { new CapsuleRewardInfo { Type = CapsuleRewardType.Item, ItemNumber = new ItemNumber(p), Effects = new uint[] { 13002 } } }
+            }).ToList()
+        };
+
+        [Fact]
+        public void ApplySetGrade_permanentSet_givesEachPartItsForcePack()
+        {
+            var box = SetBox(4051921, 1020076, 1030073, 1040065, 1050066, 1060072, 1010001);
+
+            CapsuleDataParser.ApplySetGrade(box, "Rider Set");
+
+            var effects = box.Groups.Select(g => g.Rewards[0].Effects.SingleOrDefault()).ToArray();
+            // top, pants, gloves, shoes, accessory; the face has no Force Pack and keeps the shop's.
+            Assert.Equal(new uint[] { 12002, 13002, 14002, 15002, 16002, 0 }, effects);
+        }
+
+        [Fact]
+        public void ApplySetGrade_timedSet_dropsForcePackForTheShopsStats()
+        {
+            var box = SetBox(4051920, 1030073);
+
+            CapsuleDataParser.ApplySetGrade(box, "Rider Set(30Days)");
+
+            Assert.Empty(box.Groups[0].Rewards[0].Effects);
+        }
+
         private static readonly ItemNumber FullBooster = new ItemNumber(5040006u);
 
         private PlayerItem GiveBooster(Player plr, int id)
