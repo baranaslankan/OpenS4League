@@ -149,5 +149,66 @@ namespace OpenS4L.Server.Mapping.Tests
             Assert.Contains(acks, a => a.ItemId == first.Id);
             Assert.Contains(acks, a => a.ItemId == second.Id);
         }
+
+        private static ItemUseItemAckMessage[] Acks(FakeSocketChannel channel, UseItemAction action) =>
+            channel.Outbound.Select(o => o.GetType().GetProperty("Message")?.GetValue(o))
+                .OfType<ItemUseItemAckMessage>().Where(a => a.Action == action).ToArray();
+
+        [Fact]
+        public async Task UseItem_equipItemAlreadyInThatSlot_stillAcknowledges()
+        {
+            var (plr, channel) = await LoginAsync(1807);
+            var (character, _) = plr.CharacterManager.Create(0, CharacterGender.Male, 0, 0, 0, 0, 0, 0);
+            plr.CharacterManager.Select(0);
+            var weapon = plr.Inventory.Create((ItemNumber)2010001u, ItemPriceType.PEN, ItemPeriodType.None, 0, 0, Array.Empty<uint>(), 1, false);
+
+            var handler = _ctx.Get<InventoryHandler>();
+            var req = new ItemUseItemReqMessage
+            {
+                CharacterSlot = 0, ItemId = weapon.Id, EquipSlot = (byte)WeaponSlot.Weapon1, Action = UseItemAction.Equip
+            };
+            int Failures() => channel.Outbound.Select(o => o.GetType().GetProperty("Message")?.GetValue(o))
+                .OfType<ServerResultAckMessage>().Count();
+            var failuresBefore = Failures();
+            await handler.OnHandle(new MessageContext { Session = plr.Session }, req);
+            await handler.OnHandle(new MessageContext { Session = plr.Session }, req);
+
+            // Both clicks get an equip ack (the second used to hang on SlotAlreadyInUse), no failure.
+            Assert.Equal(2, Acks(channel, UseItemAction.Equip).Count(a => a.ItemId == weapon.Id));
+            Assert.Equal(failuresBefore, Failures());
+            Assert.Same(weapon, character.Weapons.GetItems()[(int)WeaponSlot.Weapon1]);
+        }
+
+        [Fact]
+        public async Task UseItem_equipWeaponWornInAnotherSlot_movesIt()
+        {
+            var (plr, channel) = await LoginAsync(1808);
+            var (character, _) = plr.CharacterManager.Create(0, CharacterGender.Male, 0, 0, 0, 0, 0, 0);
+            plr.CharacterManager.Select(0);
+            var weapon = plr.Inventory.Create((ItemNumber)2010001u, ItemPriceType.PEN, ItemPeriodType.None, 0, 0, Array.Empty<uint>(), 1, false);
+
+            var handler = _ctx.Get<InventoryHandler>();
+            await handler.OnHandle(new MessageContext { Session = plr.Session }, new ItemUseItemReqMessage
+            {
+                CharacterSlot = 0, ItemId = weapon.Id, EquipSlot = (byte)WeaponSlot.Weapon1, Action = UseItemAction.Equip
+            });
+            await handler.OnHandle(new MessageContext { Session = plr.Session }, new ItemUseItemReqMessage
+            {
+                CharacterSlot = 0, ItemId = weapon.Id, EquipSlot = (byte)WeaponSlot.Weapon2, Action = UseItemAction.Equip
+            });
+
+            var weapons = character.Weapons.GetItems();
+            Assert.Null(weapons[(int)WeaponSlot.Weapon1]);
+            Assert.Same(weapon, weapons[(int)WeaponSlot.Weapon2]);
+            Assert.Contains(Acks(channel, UseItemAction.UnEquip), a => a.ItemId == weapon.Id && a.EquipSlot == (byte)WeaponSlot.Weapon1);
+            Assert.Contains(Acks(channel, UseItemAction.Equip), a => a.ItemId == weapon.Id && a.EquipSlot == (byte)WeaponSlot.Weapon2);
+        }
+
+        [Fact]
+        public void CharacterInventory_removeEmptySlot_returnsErrorInsteadOfThrowing()
+        {
+            var inventory = new CharacterInventory(null, 3, ItemCategory.Weapon);
+            Assert.Equal(CharacterInventoryError.InvalidSlot, inventory.Remove(0));
+        }
     }
 }

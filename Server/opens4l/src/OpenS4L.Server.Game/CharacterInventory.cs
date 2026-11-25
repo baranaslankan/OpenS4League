@@ -61,6 +61,8 @@ namespace OpenS4L.Server.Game
                 return CharacterInventoryError.InvalidSlot;
 
             var item = _items[slot];
+            if (item == null)
+                return CharacterInventoryError.InvalidSlot; // empty slot: nothing to unequip
             _items[slot] = null;
             item.CharacterInventory = null;
             _character.SetDirtyState(true);

@@ -181,8 +181,23 @@ namespace OpenS4L.Server.Game
             // SlotAlreadyInUse, which InventoryHandler used to drop silently - the client
             // was then left waiting forever for an ack, appearing as a frozen/unrendered
             // character until another weapon was selected.
-            var (existing, _) = inventory.GetItem(slot);
-            if (existing != null && existing != item)
+            var (existing, slotError) = inventory.GetItem(slot);
+            if (slotError != CharacterInventoryError.OK)
+                return slotError;
+
+            // Clicking equip on the item already in this slot: nothing changes, but the client still
+            // waits for the ack. Add would return SlotAlreadyInUse and leave it hanging.
+            if (existing == item)
+            {
+                CharacterManager.Player.Session.Send(new ItemUseItemAckMessage(Slot, slot, item.Id, UseItemAction.Equip));
+                return CharacterInventoryError.OK;
+            }
+
+            // The item is worn elsewhere (another slot of this character, or another character):
+            // move it. Add would return ItemAlreadyInUse and leave the client hanging.
+            item.CharacterInventory?.Remove(item);
+
+            if (existing != null)
                 inventory.Remove(slot);
 
             return inventory.Add(slot, item);
