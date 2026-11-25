@@ -130,7 +130,11 @@ namespace OpenS4L.Server.Mapping.Tests
             return gds;
         }
 
-        public static PlayerItem CreatePlayerItem(GameDataService gds)
+        /// <summary>
+        /// A 30-day item bought at unix 1700000000 (long expired) unless <paramref name="purchaseDate"/>
+        /// says otherwise.
+        /// </summary>
+        public static PlayerItem CreatePlayerItem(GameDataService gds, DateTimeOffset? purchaseDate = null)
         {
             var inventory = new PlayerInventory(
                 new Logger<PlayerInventory>(),
@@ -142,7 +146,8 @@ namespace OpenS4L.Server.Mapping.Tests
             return new PlayerItem(
                 gds, inventory, 9001,
                 Stash.ShopItemInfo, Stash.ShopPrice,
-                color: 2, effects: new uint[] { 1 }, purchaseDate: DateTimeOffset.FromUnixTimeSeconds(1700000000));
+                color: 2, effects: new uint[] { 1 },
+                purchaseDate: purchaseDate ?? DateTimeOffset.FromUnixTimeSeconds(1700000000));
         }
 
         public static RoomCreationOptions CreateRoomCreationOptions()
@@ -167,7 +172,8 @@ namespace OpenS4L.Server.Mapping.Tests
         /// Seeds a shop item into the GameDataService so Inventory.Create can resolve it
         /// (the login flow's SendAccountInformation creates the slot-coupon item 6000015).
         /// </summary>
-        public static void SeedShopItem(GameDataService gds, ItemNumber itemNumber, int priceGroupId = 10)
+        public static void SeedShopItem(GameDataService gds, ItemNumber itemNumber, int priceGroupId = 10,
+            Gender gender = Gender.None)
         {
             var entity = new ShopItemInfoEntity
             {
@@ -178,11 +184,11 @@ namespace OpenS4L.Server.Mapping.Tests
             var shopItem = new ShopItem(new ShopItemEntity
             {
                 Id = itemNumber.Id,
-                RequiredGender = (byte)Gender.None,
+                RequiredGender = (byte)gender,
                 ItemInfos = new List<ShopItemInfoEntity> { entity }
             }, gds);
             var info = new ShopItemInfo(shopItem, entity, gds);
-            var itemInfo = new ItemInfo { ItemNumber = itemNumber, Name = "Coupon", Gender = Gender.None };
+            var itemInfo = new ItemInfo { ItemNumber = itemNumber, Name = "Coupon", Gender = gender };
 
             // Reflectively extend the collections.
             var items = gds.Items.Add(itemNumber, itemInfo);
@@ -190,6 +196,67 @@ namespace OpenS4L.Server.Mapping.Tests
             Set(gds, "Items", items);
             Set(gds, "ShopItems", shopItems);
             Stash.ShopItemInfo = info;
+        }
+
+        /// <summary>Adds a free per-unit price group (1 and 5 units), like the provisioned consumables.</summary>
+        public static int SeedUnitPriceGroup(GameDataService gds, int id = 11)
+        {
+            var group = new ShopPriceGroup(new ShopPriceGroupEntity
+            {
+                Id = id,
+                PriceType = (byte)ItemPriceType.PEN,
+                Name = "units",
+                ShopPrices = new List<ShopPriceEntity>
+                {
+                    new ShopPriceEntity
+                    {
+                        Id = id * 10 + 1, PriceGroupId = id, PeriodType = (byte)ItemPeriodType.Units,
+                        Period = 1, Price = 0, IsRefundable = true, Durability = 1, IsEnabled = true
+                    },
+                    new ShopPriceEntity
+                    {
+                        Id = id * 10 + 5, PriceGroupId = id, PeriodType = (byte)ItemPeriodType.Units,
+                        Period = 5, Price = 0, IsRefundable = true, Durability = 1, IsEnabled = true
+                    }
+                }
+            });
+            Set(gds, "ShopPrices", gds.ShopPrices.SetItem(id, group));
+            return id;
+        }
+
+        /// <summary>Adds (or replaces) a price group with the given prices.</summary>
+        public static ShopPriceGroup SeedPriceGroup(GameDataService gds, int id, ItemPriceType priceType,
+            params ShopPriceEntity[] prices)
+        {
+            foreach (var price in prices)
+            {
+                price.PriceGroupId = id;
+                price.IsEnabled = true;
+            }
+
+            var group = new ShopPriceGroup(new ShopPriceGroupEntity
+            {
+                Id = id,
+                PriceType = (byte)priceType,
+                Name = "group" + id,
+                ShopPrices = prices.ToList()
+            });
+            Set(gds, "ShopPrices", gds.ShopPrices.SetItem(id, group));
+            return group;
+        }
+
+        /// <summary>Builds a PlayerItem of the given shop item info and price (not added to an inventory).</summary>
+        public static PlayerItem CreatePlayerItem(GameDataService gds, ShopItemInfo itemInfo, ShopPrice price,
+            DateTimeOffset purchaseDate)
+        {
+            var inventory = new PlayerInventory(
+                new Logger<PlayerInventory>(),
+                gds,
+                new OpenS4L.Common.IdGeneratorService(
+                    Microsoft.Extensions.Options.Options.Create(new OpenS4L.Common.Configuration.IdGeneratorOptions { Id = 1 })),
+                new OpenS4L.Server.Game.Mappers.GameMapper());
+
+            return new PlayerItem(gds, inventory, 9002, itemInfo, price, 0, Array.Empty<uint>(), purchaseDate);
         }
 
         /// <summary>Builds a DefaultItem whose SubCategory encodes the costume slot.</summary>
@@ -205,6 +272,42 @@ namespace OpenS4L.Server.Mapping.Tests
         }
 
         public static OpenS4L.Server.Game.Mappers.GameMapper CreateMapper() => new();
+
+        /// <summary>
+        /// Adds a PEN price group with the given (period type, period) prices, like the provisioned
+        /// shop with day periods on. Price ids are <paramref name="id"/> * 100 + index.
+        /// </summary>
+        public static int SeedPeriodPriceGroup(GameDataService gds, int id, params (ItemPeriodType type, ushort period)[] prices)
+        {
+            var group = new ShopPriceGroup(new ShopPriceGroupEntity
+            {
+                Id = id,
+                PriceType = (byte)ItemPriceType.PEN,
+                Name = "periods" + id,
+                ShopPrices = prices.Select((p, i) => new ShopPriceEntity
+                {
+                    Id = id * 100 + i, PriceGroupId = id, PeriodType = (byte)p.type,
+                    Period = p.period, Price = 100, IsRefundable = true, Durability = 2400, IsEnabled = true
+                }).ToList()
+            });
+            Set(gds, "ShopPrices", gds.ShopPrices.SetItem(id, group));
+            return id;
+        }
+
+        /// <summary>Replaces the map table (the default fixture only has map 3 = Practice).</summary>
+        public static void SetMaps(GameDataService gds, params MapInfo[] maps)
+        {
+            Set(gds, "Maps", ImmutableArray.Create(maps));
+        }
+
+        /// <summary>Adds effect_list entries (the default fixture has none).</summary>
+        public static void AddEffects(GameDataService gds, params ItemEffect[] effects)
+        {
+            var dict = gds.Effects;
+            foreach (var effect in effects)
+                dict = dict.SetItem(effect.Id, effect);
+            Set(gds, "Effects", dict);
+        }
 
         private static void Set(object obj, string prop, object value)
         {

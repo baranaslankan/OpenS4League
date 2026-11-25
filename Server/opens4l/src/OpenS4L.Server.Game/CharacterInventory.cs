@@ -61,11 +61,20 @@ namespace OpenS4L.Server.Game
                 return CharacterInventoryError.InvalidSlot;
 
             var item = _items[slot];
+            if (item == null)
+                return CharacterInventoryError.InvalidSlot; // empty slot: nothing to unequip
             _items[slot] = null;
             item.CharacterInventory = null;
             _character.SetDirtyState(true);
             OnItemRemoved(slot, item);
             return CharacterInventoryError.OK;
+        }
+
+        /// <summary>Unequips the given item from whichever slot holds it. False when it is not equipped here.</summary>
+        public bool Remove(PlayerItem item)
+        {
+            var slot = Array.IndexOf(_items, item);
+            return slot >= 0 && Remove((byte)slot) == CharacterInventoryError.OK;
         }
 
         public (PlayerItem, CharacterInventoryError) GetItem(byte slot)

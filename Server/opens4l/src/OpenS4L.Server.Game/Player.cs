@@ -105,6 +105,12 @@ namespace OpenS4L.Server.Game
         public DateTimeOffset StartPlayTime { get; internal set; }
         public DateTimeOffset[] CharacterStartPlayTime { get; internal set; }
         public bool IsInGMMode { get; set; }
+
+        /// <summary>
+        /// Boost items the player switched on (the client "equips" boosts into its boost slot).
+        /// Kept for the session only: after a relog the player switches them on again.
+        /// </summary>
+        public HashSet<ulong> EquippedBoosts { get; } = new HashSet<ulong>();
         public bool IsLoading { get; internal set; }
 
         public event EventHandler<PlayerEventArgs> Disconnected;
@@ -263,14 +269,24 @@ namespace OpenS4L.Server.Game
                 leveledUp = true;
             }
 
-            if (!leveledUp)
-                return false;
+            // The client is not told here: callers send SendExperienceUpdate() when it fits
+            // (the match result sends it after the result briefing).
+            // The chat server is updated by Room on GameState.Result (PlayerUpdateMessage).
+            return leveledUp;
+        }
 
-            // TODO Update chat server
-            // TODO Do we need this?
-            // Session.Send(new SBeginAccountInfoAckMessage())
-
-            return true;
+        /// <summary>
+        /// Refreshes the lobby EXP bar/level after the experience changed.
+        /// Without this the client only learns the experience at login (PlayerAccountInfoAck).
+        /// </summary>
+        public void SendExperienceUpdate()
+        {
+            // The single field of ExpRefreshInfoAck is unconfirmed; GameOptions.ExpRefreshUsesAccountInfo
+            // switches to re-sending the login account info, which is known to fill the bar
+            if (_gameOptions.ExpRefreshUsesAccountInfo)
+                Session.Send(new PlayerAccountInfoAckMessage(CreateAccountInfoDto()));
+            else
+                Session.Send(new ExpRefreshInfoAckMessage { Unk = (int)TotalExperience });
         }
 
         public TimeSpan GetCurrentPlayTime()
@@ -392,15 +408,16 @@ namespace OpenS4L.Server.Game
             // it, the client assumes the player owns no licenses and refuses to enter any
             // channel. The reference stack shipped with EnableLicenseRequirement:false and
             // effectively granted all licenses — mirror that by sending every license.
-            Session.Send(new LicenseMyInfoAckMessage(
-                Enum.GetValues(typeof(ItemLicense))
-                    .Cast<ItemLicense>()
-                    .Where(x => x != ItemLicense.None)
-                    .Select(x => (uint)x)
-                    .ToArray()
-            ));
+            SendLicenses();
 
-            Session.Send(new PlayerAccountInfoAckMessage(new PlayerAccountInfoDto
+            Session.Send(new PlayerAccountInfoAckMessage(CreateAccountInfoDto()));
+
+            SendClubInfo();
+        }
+
+        private PlayerAccountInfoDto CreateAccountInfoDto()
+        {
+            return new PlayerAccountInfoDto
             {
                 Level = (byte)Level,
                 TotalExperience = TotalExperience,
@@ -408,10 +425,8 @@ namespace OpenS4L.Server.Game
                 PEN = PEN,
                 TutorialState = (uint)(_gameOptions.EnableTutorial ? TutorialState : 2),
                 Nickname = Account.Nickname,
-                IsGM = Account.SecurityLevel > SecurityLevel.User
-            }));
-
-            SendClubInfo();
+                IsGM = _gameOptions.ShowGMFlag && Account.SecurityLevel > SecurityLevel.User
+            };
         }
 
         public void SendClubInfo()
@@ -424,6 +439,21 @@ namespace OpenS4L.Server.Game
                 State = ClanMember?.State ?? ClubMemberState.None,
                 Role = ClanMember?.Role ?? ClubRole.Normal
             });
+        }
+
+        /// <summary>Every license is granted (no license progress is stored), see SendAccountInformation.</summary>
+        public static uint[] GetLicenses()
+        {
+            return Enum.GetValues(typeof(ItemLicense))
+                .Cast<ItemLicense>()
+                .Where(x => x != ItemLicense.None)
+                .Select(x => (uint)x)
+                .ToArray();
+        }
+
+        public void SendLicenses()
+        {
+            Session.Send(new LicenseMyInfoAckMessage(GetLicenses()));
         }
 
         public void SendMoneyUpdate()

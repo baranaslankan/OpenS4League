@@ -1,20 +1,54 @@
+using System;
+using System.Linq;
 using System.Threading.Tasks;
 using Logging;
 using OpenS4L.Network;
 using OpenS4L.Network.Message.Game;
+using OpenS4L.Server.Game.Services;
 using ProudNet;
 
 namespace OpenS4L.Server.Game.Handlers
 {
     internal class InventoryHandler
         : IHandle<ItemUseItemReqMessage>, IHandle<ItemRepairItemReqMessage>, IHandle<ItemRefundItemReqMessage>,
-          IHandle<ItemDiscardItemReqMessage>
+          IHandle<ItemDiscardItemReqMessage>, IHandle<ItemUseCapsuleReqMessage>
     {
         private readonly ILogger _logger;
+        private readonly GameDataService _gameDataService;
 
-        public InventoryHandler(ILogger<InventoryHandler> logger)
+        public InventoryHandler(ILogger<InventoryHandler> logger, GameDataService gameDataService)
         {
             _logger = logger;
+            _gameDataService = gameDataService;
+        }
+
+        [Inline]
+        public async Task<bool> OnHandle(MessageContext context, ItemUseCapsuleReqMessage message)
+        {
+            var session = context.GetSession<Session>();
+            var plr = session.Player;
+            var capsule = plr?.Inventory[message.ItemId];
+            if (capsule == null)
+            {
+                session.Send(new ItemUseCapsuleAckMessage(CapsuleOpener.ResultFailed));
+                return true;
+            }
+
+            var rewards = CapsuleOpener.Open(plr, capsule, _gameDataService, Random.Shared);
+            if (rewards == null)
+            {
+                _logger.Warning("Unable to open capsule {ItemNumber} (no known rewards in the shop)",
+                    capsule.ItemNumber);
+                session.Send(new ItemUseCapsuleAckMessage(CapsuleOpener.ResultFailed));
+                return true;
+            }
+
+            _logger.Information("Opened capsule {ItemNumber}: {Rewards}", capsule.ItemNumber,
+                string.Join(", ", rewards.Select(r => r.RewardType == CapsuleRewardType.PEN
+                    ? r.PEN + " PEN"
+                    : r.ItemNumber.ToString())));
+            session.Send(new ItemUseCapsuleAckMessage(rewards, CapsuleOpener.ResultSuccess));
+            return true;
         }
 
         [Inline]
@@ -39,8 +73,12 @@ namespace OpenS4L.Server.Game.Handlers
                 return true;
             }
 
-            if (character == null || item == null || plr.Room != null && plr.State != PlayerState.Lobby)
+            // Boosts go into the boost slot, not onto a character, so they need no character.
+            if (character == null && item?.ItemNumber.Category != ItemCategory.Boost || item == null ||
+                plr.Room != null && plr.State != PlayerState.Lobby)
             {
+                _logger.Warning("Item use refused Action={Action} Item={ItemNumber} CharacterSlot={CharacterSlot} EquipSlot={EquipSlot} InRoom={InRoom}",
+                    message.Action, item?.ItemNumber, message.CharacterSlot, message.EquipSlot, plr.Room != null);
                 session.Send(new ServerResultAckMessage(ServerResult.FailedToRequestTask));
                 return true;
             }
@@ -50,16 +88,54 @@ namespace OpenS4L.Server.Game.Handlers
             // so always send a result here too - otherwise the client hangs indefinitely on a
             // request the server dropped (see Character.Equip for the equip-slot-swap case this
             // used to hit on almost every weapon change).
+            // Boosts (PEN/EXP Plus, Unique Boosters) go into the client's boost slot, not onto the
+            // character: the client sends an equip and waits for the list of active boosts.
+            if (item.ItemNumber.Category == ItemCategory.Boost &&
+                (message.Action == UseItemAction.Equip || message.Action == UseItemAction.UnEquip))
+            {
+                if (message.Action == UseItemAction.Equip && !item.IsExpiredOrUsedUp())
+                {
+                    // One Unique Booster at a time: a new one replaces the old.
+                    if (CapsuleOpener.IsUniqueBooster(item.ItemNumber))
+                        plr.EquippedBoosts.RemoveWhere(id => plr.Inventory[id] is { } b && CapsuleOpener.IsUniqueBooster(b.ItemNumber));
+                    plr.EquippedBoosts.Add(item.Id);
+                }
+                else
+                {
+                    plr.EquippedBoosts.Remove(item.Id);
+                }
+
+                _logger.Information("Boost {Action} Item={ItemNumber}", message.Action, item.ItemNumber);
+                // The client waits ("Requesting...") for the same ack a costume equip gets.
+                session.Send(new ItemUseItemAckMessage(message.CharacterSlot, message.EquipSlot, item.Id, message.Action));
+                CapsuleOpener.SendBoosts(plr);
+                return true;
+            }
+
             switch (message.Action)
             {
                 case UseItemAction.Equip:
-                    if (character.Equip(item, message.EquipSlot) != CharacterInventoryError.OK)
+                {
+                    var error = character.Equip(item, message.EquipSlot);
+                    if (error != CharacterInventoryError.OK)
+                    {
+                        _logger.Warning("Equip refused Item={ItemNumber} EquipSlot={EquipSlot} Error={Error}",
+                            item.ItemNumber, message.EquipSlot, error);
                         session.Send(new ServerResultAckMessage(ServerResult.WearingUnusableItem));
+                    }
                     break;
+                }
 
                 case UseItemAction.UnEquip:
                     if (character.UnEquip(item.ItemNumber.Category, message.EquipSlot) != CharacterInventoryError.OK)
                         session.Send(new ServerResultAckMessage(ServerResult.WearingUnusableItem));
+                    break;
+
+                default:
+                    // Not known yet (using a Unique Booster may send this): logged so the real client's
+                    // request can be identified. No answer, as before: the client may send it routinely.
+                    _logger.Warning("Unknown item use Action={Action} Item={ItemNumber} CharacterSlot={CharacterSlot} EquipSlot={EquipSlot}",
+                        message.Action, item.ItemNumber, message.CharacterSlot, message.EquipSlot);
                     break;
             }
 
@@ -183,7 +259,8 @@ namespace OpenS4L.Server.Game.Handlers
                 return true;
             }
 
-            if (!shopItem.IsDestroyable)
+            // An expired period item can always be thrown away.
+            if (!shopItem.IsDestroyable && !item.IsExpired)
             {
                 logger.Warning("Cannot discard item={ItemId}", message.ItemId);
                 session.Send(new ItemDiscardItemAckMessage(2, 0));

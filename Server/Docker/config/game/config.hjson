@@ -36,6 +36,8 @@
   Game:
   {
     EnableTutorial: true
+    # false: staff accounts are not flagged as GM to the client, so capsule animations play
+    ShowGMFlag: false
     EnableLicenseRequirement: true
     MaxLevel: 100
     StartLevel: 0
@@ -43,6 +45,8 @@
     StartAP: 0
     StartCoins1: 0
     StartCoins2: 0
+    # false: refresh the lobby EXP bar with ExpRefreshInfoAck, true: re-send PlayerAccountInfoAck
+    ExpRefreshUsesAccountInfo: false
     NickRestrictions:
     {
       MinLength: 4
@@ -59,6 +63,18 @@
     }
     DurabilityLossPerDeath: 0
     DurabilityLossPerMinute: 0
+    # Match PEN rewards (formula in GameRuleBase.CalculatePENGained; rates per mode under PENRates)
+    PENRewards:
+    {
+      # multiplier for the base match PEN (1 = point_bonus.x7 rates)
+      Multiplier: 1
+      # level bonus from point_bonus.x7 (10-19: 20%, 20-29: 25%, 30+: 30%), paid as bonus PEN
+      EnableLevelBonus: true
+      # PEN Plus boost items the player owns add their rate to the bonus PEN
+      EnableBoostItems: true
+      # fill the bonus icons of the result screen (untested in game)
+      SendResultBonusFlags: false
+    }
     Deathmatch:
     {
       ExperienceRates:
@@ -69,6 +85,13 @@
         ThirdPlaceBonus: 10
         PlayerCountFactor: 0.06
         ExperiencePerMinute: 20
+      }
+      # point_bonus.x7: PEN = minutes * PointsPerMinute * (1 + score * ScoreFactor + players * PlayerCountFactor)
+      PENRates:
+      {
+        PointsPerMinute: 15.645
+        ScoreFactor: 0.006
+        PlayerCountFactor: 0.007
       }
       PointsPerKill: 2
       PointsPerKillAssist: 1
@@ -85,6 +108,13 @@
         ThirdPlaceBonus: 10
         PlayerCountFactor: 0.06
         ExperiencePerMinute: 20
+      }
+      # point_bonus.x7: PEN = minutes * PointsPerMinute * (1 + score * ScoreFactor + players * PlayerCountFactor)
+      PENRates:
+      {
+        PointsPerMinute: 15.645
+        ScoreFactor: 0.006
+        PlayerCountFactor: 0.007
       }
       PointsPerGoal: 10
       PointsPerGoalAssist: 5
@@ -109,6 +139,13 @@
         PlayerCountFactor: 0.06
         ExperiencePerMinute: 20
       }
+      # point_bonus.x7: PEN = minutes * PointsPerMinute * (1 + score * ScoreFactor + players * PlayerCountFactor)
+      PENRates:
+      {
+        PointsPerMinute: 19.02
+        ScoreFactor: 0.006
+        PlayerCountFactor: 0.007
+      }
       PointsPerKill: 2
       PointsPerKillAssist: 1
       PointsPerBonusKill: 5
@@ -126,12 +163,44 @@
         PlayerCountFactor: 0.06
         ExperiencePerMinute: 20
       }
+      # point_bonus.x7: PEN = minutes * PointsPerMinute * (1 + score * ScoreFactor + players * PlayerCountFactor)
+      PENRates:
+      {
+        PointsPerMinute: 15.645
+        ScoreFactor: 0.006
+        PlayerCountFactor: 0.007
+      }
       PointsPerKill: 2
       PointsPerKillAssist: 1
       PointsPerCaptainKill: 5
       PointsPerRoundWin: 5
       PointsPerSuicide: -1
       PointsPerHeal: 1
+    }
+    Chaser:
+    {
+      ExperienceRates:
+      {
+        ScoreFactor: 0.7
+        FirstPlaceBonus: 50
+        SecondPlaceBonus: 30
+        ThirdPlaceBonus: 10
+        PlayerCountFactor: 0.06
+        ExperiencePerMinute: 20
+      }
+      // The points and times below match what the client shows, change them only deliberately
+      PointsPerChaserKill: 2
+      PointsPerBonusKill: 4
+      PointsPerRoundWin: 5
+      PointsPerRoundSurvived: 10
+      MinPlayers: 2
+      // Seconds. Round time = RoundTime + RoundTimePerExtraPlayer for every player above RoundTimeExtraPlayerThreshold
+      RoundTime: 60
+      RoundTimePerExtraPlayer: 10
+      RoundTimeExtraPlayerThreshold: 6
+      FirstRoundIntro: 7
+      RoundIntro: 4
+      NextRoundDelay: 5
     }
   }
 }

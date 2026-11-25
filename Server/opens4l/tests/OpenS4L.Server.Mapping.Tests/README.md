@@ -20,7 +20,7 @@ separate fix.
 
 | # | Mapping | Legacy behaviour (preserved) | What it should be | Location |
 |---|---------|------------------------------|-------------------|----------|
-| 1 | `PlayerItem → ItemDto.ExpireTime` (Game) | ExpressMapper assigns `src.ExpireDate.ToUnixTimeSeconds()` (a `long`) into a `DateTimeOffset`-typed member. It has no `long → DateTimeOffset` conversion, so it silently leaves the field at `DateTimeOffset.MinValue`. | The item's actual expiry as a timestamp. | `Server/opens4l/src/OpenS4L.Server.Game/Mappers/GameMapper.cs` (ToItemDto) |
+| 1 | `PlayerItem → ItemDto.ExpireTime` (Game) — **FIXED** | ExpressMapper assigns `src.ExpireDate.ToUnixTimeSeconds()` (a `long`) into a `DateTimeOffset`-typed member. It has no `long → DateTimeOffset` conversion, so it silently leaves the field at `DateTimeOffset.MinValue`. | The item's actual expiry as a timestamp. Fixed deliberately: hour/day items now send their expiry, other items unix time `-1` (what the legacy config intended). The client hands this int64 to `_localtime64_s` and counts day items down against it. `GameMappingDifferentialTests.PlayerItem_ToItemDto_MatchesLegacyWithFixedExpireTime` patches only this member on the legacy side, so the rest stays pinned; `ItemExpiryTests` covers the values. | `Server/opens4l/src/OpenS4L.Server.Game/Mappers/GameMapper.cs` (ToItemDto) |
 | 2 | `MapInfo → MapDto.GameRules` (WebApi) | `Register<MapInfo, MapDto>()` had no explicit members, so ExpressMapper auto-mapped same-named props only. `MapInfo` has no `GameRules` property → `GameRules` is always `null`. | `GameRules` populated from `map.GameRule`. | `Server/opens4l/src/plugins/OpenS4L.Plugins.WebApi/Mappers/WebApiMapper.cs` (ToMapDto) |
 
 ## Other latent bugs surfaced by contract tests

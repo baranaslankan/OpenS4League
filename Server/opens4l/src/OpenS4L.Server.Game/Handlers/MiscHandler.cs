@@ -1,5 +1,6 @@
 using System;
 using System.Threading.Tasks;
+using Logging;
 using OpenS4L.Blub;
 using OpenS4L.Network.Message.Game;
 using OpenS4L.Server.Game.Rules;
@@ -12,10 +13,12 @@ namespace OpenS4L.Server.Game.Handlers
         : IHandle<TimeSyncReqMessage>, IHandle<AdminShowWindowReqMessage>, IHandle<AdminActionReqMessage>
     {
         private readonly CommandService _commandService;
+        private readonly ILogger _logger;
 
-        public MiscHandler(CommandService commandService)
+        public MiscHandler(CommandService commandService, ILogger<MiscHandler> logger)
         {
             _commandService = commandService;
+            _logger = logger;
         }
 
         [Inline]
@@ -37,6 +40,8 @@ namespace OpenS4L.Server.Game.Handlers
             var session = context.GetSession<Session>();
             var plr = session.Player;
 
+            _logger.Debug("AdminShowWindowReq from {Nickname} level={SecurityLevel}",
+                plr.Account.Nickname, plr.Account.SecurityLevel);
             session.Send(new AdminShowWindowAckMessage(plr.Account.SecurityLevel <= SecurityLevel.User));
             return true;
         }
@@ -48,6 +53,7 @@ namespace OpenS4L.Server.Game.Handlers
             var session = context.GetSession<Session>();
             var plr = session.Player;
 
+            _logger.Debug("AdminActionReq from {Nickname} command={Command}", plr.Account.Nickname, message.Command);
             await _commandService.Execute(plr, message.Command.GetArgs());
             return true;
         }

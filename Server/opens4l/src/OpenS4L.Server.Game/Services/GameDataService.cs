@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
@@ -20,10 +21,25 @@ namespace OpenS4L.Server.Game.Services
         public ImmutableDictionary<int, LevelInfo> Levels { get; private set; }
         public ImmutableArray<MapInfo> Maps { get; private set; }
         public ImmutableDictionary<uint, ItemEffect> Effects { get; private set; }
+
+        /// <summary>
+        /// Effect group ids of the client's effect_match_list.x7 (e.g. 12002 "Attack+12%, EXP+5%").
+        /// Items may carry them in place of plain effect ids; the client shows the group.
+        /// </summary>
+        public ImmutableHashSet<uint> EffectMatches { get; private set; } = ImmutableHashSet<uint>.Empty;
+
+        /// <summary>English names of <see cref="EffectMatches"/> (e.g. 12002 "Attack+12%, EXP+5%").</summary>
+        public ImmutableDictionary<uint, string> EffectMatchNames { get; private set; } =
+            ImmutableDictionary<uint, string>.Empty;
+
+        /// <summary>True for an effect id the client knows: a plain effect or an effect group.</summary>
+        public bool IsKnownEffect(uint id) => Effects.ContainsKey(id) || EffectMatches.Contains(id);
         public ImmutableDictionary<ItemNumber, ItemInfo> Items { get; private set; }
         public ImmutableArray<DefaultItem> DefaultItems { get; private set; }
         public ImmutableDictionary<string, GameTempo> GameTempos { get; private set; }
         public ImmutableDictionary<int, EquipLimitInfo> EquipLimits { get; private set; }
+        public ImmutableDictionary<ItemNumber, CapsuleInfo> Capsules { get; private set; } =
+            ImmutableDictionary<ItemNumber, CapsuleInfo>.Empty;
 
         // Shop data
         public ImmutableDictionary<ItemNumber, ShopItem> ShopItems { get; private set; }
@@ -67,6 +83,36 @@ namespace OpenS4L.Server.Game.Services
                    ?? Levels.Last().Value;
         }
 
+        /// <summary>
+        /// Finds a map by the id the client sends (a byte) and the game rule.
+        /// The game rule is needed because the random placeholders collide with real maps once
+        /// truncated (999 -> 231). If no map matches the game rule, any map with the id is returned
+        /// so callers can still tell "invalid game rule" apart from "invalid map".
+        /// </summary>
+        public MapInfo GetMap(byte mapId, GameRule gameRule)
+        {
+            var maps = Maps.Where(x => x.WireId == mapId).ToArray();
+            return maps.Where(x => x.GameRule == gameRule).OrderBy(x => x.IsRandom).FirstOrDefault()
+                   ?? maps.OrderBy(x => x.IsRandom).FirstOrDefault();
+        }
+
+        /// <summary>
+        /// Picks a random enabled real map for the given game rule.
+        /// Maps that can hold <paramref name="playerLimit"/> players are preferred.
+        /// </summary>
+        /// <returns>null when there is no enabled map for the game rule</returns>
+        public MapInfo GetRandomMap(GameRule gameRule, int playerLimit = 0)
+        {
+            var maps = Maps
+                .Where(x => !x.IsRandom && x.IsEnabled && x.GameRule == gameRule && x.Id <= byte.MaxValue)
+                .ToArray();
+            var fitting = maps.Where(x => x.PlayerLimit >= playerLimit).ToArray();
+            if (fitting.Length > 0)
+                maps = fitting;
+
+            return maps.Length == 0 ? null : maps[Random.Shared.Next(maps.Length)];
+        }
+
         public async Task StartAsync(CancellationToken cancellationToken)
         {
             LoadLevels();
@@ -76,6 +122,8 @@ namespace OpenS4L.Server.Game.Services
             LoadDefaultItems();
             LoadGameTempos();
             LoadEquipLimits();
+            LoadCapsules();
+            LoadRandomShop();
             await LoadShop();
             await LoadLevelRewards();
         }

@@ -77,8 +77,35 @@ namespace OpenS4L.Server.Game
                         entityItem.Id, entityItem.ShopItemInfoId, entityItem.ShopPriceId);
                     continue;
                 }
+                // Already expired at login: deleted, never listed. Characters loaded after this don't
+                // find it and drop it from their slots; the save clears their references before deleting.
+                if (item.IsExpired)
+                {
+                    _logger.Information("Deleting expired item Id={ItemId} ItemNumber={ItemNumber} ExpireDate={ExpireDate}",
+                        item.Id, item.ItemNumber, item.ExpireDate);
+                    _itemsToRemove.Push(item);
+                    continue;
+                }
+
                 _items.TryAdd(item.Id, item);
             }
+        }
+
+        /// <summary>
+        /// Handles period items whose time ran out: unequips them from their character (the client gets
+        /// the usual UnEquip ack), then deletes them from the inventory (the client gets the delete ack).
+        /// Returns the deleted items.
+        /// </summary>
+        public IReadOnlyList<PlayerItem> UpdateExpiredItems(DateTimeOffset now)
+        {
+            var expired = _items.Values.Where(x => x.IsExpiredAt(now)).ToList();
+            foreach (var item in expired)
+            {
+                item.CharacterInventory?.Remove(item);
+                Remove(item);
+            }
+
+            return expired;
         }
 
         /// <summary>
@@ -160,6 +187,55 @@ namespace OpenS4L.Server.Game
         /// </summary>
         public PlayerItem Create(ShopItemInfo shopItemInfo, ShopPrice price, byte color, uint[] effects, bool sendUpdate = true)
         {
+            // Per-unit items stack: the client shows an item's durability as its count.
+            if (price.PeriodType == ItemPeriodType.Units)
+            {
+                var units = Math.Max(1, (int)price.Period);
+                var stack = _items.Values.FirstOrDefault(x => x.ItemNumber == shopItemInfo.ShopItem.ItemNumber &&
+                                                              x.PeriodType == ItemPeriodType.Units && x.Color == color);
+                if (stack != null)
+                {
+                    stack.Durability += units;
+                    if (sendUpdate)
+                        SendStackUpdate(stack);
+                    return stack;
+                }
+
+                var first = CreateNew(shopItemInfo, price, color, effects, false);
+                first.Durability = units;
+                if (sendUpdate)
+                    Player.Session.Send(new ItemUpdateInventoryAckMessage(InventoryAction.Add, _mapper.ToItemDto(first)));
+                return first;
+            }
+
+            return CreateNew(shopItemInfo, price, color, effects, sendUpdate);
+        }
+
+        /// <summary>
+        /// Uses up one of a per-unit item: lowers the stack, or removes the item when it was the last one.
+        /// </summary>
+        public bool UseOne(PlayerItem item)
+        {
+            if (GetItem(item.Id) == null)
+                return false;
+
+            if (item.PeriodType == ItemPeriodType.Units && item.Durability > 1)
+            {
+                item.Durability -= 1;
+                SendStackUpdate(item);
+                return true;
+            }
+
+            return Remove(item);
+        }
+
+        private void SendStackUpdate(PlayerItem item)
+        {
+            Player.Session.Send(new ItemUpdateInventoryAckMessage(InventoryAction.Update, _mapper.ToItemDto(item)));
+        }
+
+        private PlayerItem CreateNew(ShopItemInfo shopItemInfo, ShopPrice price, byte color, uint[] effects, bool sendUpdate)
+        {
             var itemId = _idGeneratorService.GetNextId(IdKind.Item);
             var item = new PlayerItem(_gameDataService, this,
                 itemId, shopItemInfo, price, color, effects, DateTimeOffset.Now);
@@ -170,6 +246,71 @@ namespace OpenS4L.Server.Game
 
             return item;
         }
+
+        /// <summary>
+        /// Gives a shop item without charging for it (admin commands, capsule rewards).
+        /// Uses the shop price matching <paramref name="periodType"/>/<paramref name="period"/> when one
+        /// exists, otherwise a permanent price, otherwise any enabled price. Effects match a purchase.
+        /// Returns null when the item is not in the shop or has no enabled price.
+        /// </summary>
+        public PlayerItem CreateFromShop(ItemNumber itemNumber, ItemPeriodType periodType = ItemPeriodType.None,
+            ushort period = 0, byte color = 0, uint[] effects = null, bool noEffects = false)
+        {
+            var shopItem = _gameDataService.GetShopItem(itemNumber);
+            if (shopItem == null)
+                return null;
+
+            // Listings hidden from the shop still count: capsules can give items that aren't sold.
+            // The visible listing wins over a hidden one even when only the hidden one has the exact
+            // period: PlayerItem resolves its listing by item number + price type (the first one), so
+            // an item created from another listing could not be saved. The provisioned shop has one
+            // listing per item, whose price group carries permanent + the day periods.
+            var choice = shopItem.ItemInfos
+                .Where(info => info.PriceGroup != null)
+                // Prices the shop doesn't offer (IsEnabled false, e.g. the hidden permanent price of
+                // an item sold for days only) still count when they are the exact period asked for.
+                .SelectMany(info => info.PriceGroup.Prices.Select(price => (info, price)))
+                .Where(x => x.price.IsEnabled || (x.price.PeriodType == periodType && x.price.Period == period))
+                .OrderBy(x => x.info.IsEnabled ? 0 : 1)
+                .ThenBy(x => x.price.PeriodType == periodType && x.price.Period == period ? 0
+                    // a timed reward without its exact period: the nearest timed price, never permanent
+                    : IsTimed(periodType) && IsTimed(x.price.PeriodType) ? 1
+                    : x.price.PeriodType == ItemPeriodType.None ? 2 : 3)
+                .ThenBy(x => x.price.IsEnabled ? 0 : 1)
+                .ThenBy(x => IsTimed(periodType) && IsTimed(x.price.PeriodType)
+                    ? Math.Abs(ToHours(x.price.PeriodType, x.price.Period) - ToHours(periodType, period))
+                    // a permanent reward of an item sold only for a time: the longest time
+                    : periodType == ItemPeriodType.None && IsTimed(x.price.PeriodType)
+                        ? -ToHours(x.price.PeriodType, x.price.Period)
+                        : 0)
+                .ThenBy(x => x.price.Period) // per-unit items: one unit
+                .FirstOrDefault();
+
+            if (choice.info == null)
+                return null;
+
+            // Ids the client doesn't know (neither an effect nor an effect group) fall back to the shop's.
+            // Those come from the cash (AP) listing whatever price was picked: the PEN listing has the
+            // low PEN-shop stats (weapon Attack+1%), and rewards (capsules, set boxes) are the cash
+            // shop's items. A timed reward would otherwise land on the PEN listing's stats.
+            effects = noEffects ? Array.Empty<uint>() : effects?.Where(x => _gameDataService.IsKnownEffect(x)).ToArray();
+            if (!noEffects && (effects == null || effects.Length == 0))
+                effects = ShopEffects(shopItem.ItemInfos.FirstOrDefault(x => x.PriceGroup?.PriceType == ItemPriceType.AP))
+                          ?? ShopEffects(choice.info)
+                          ?? Array.Empty<uint>();
+            return Create(choice.info, choice.price, color, effects);
+        }
+
+        private static uint[] ShopEffects(ShopItemInfo info)
+        {
+            var effects = info?.EffectGroup?.Effects.Select(x => x.Effect).Where(x => x != 0).ToArray();
+            return effects == null || effects.Length == 0 ? null : effects;
+        }
+
+        private static bool IsTimed(ItemPeriodType type) => type == ItemPeriodType.Days || type == ItemPeriodType.Hours;
+
+        private static long ToHours(ItemPeriodType type, ushort period) =>
+            type == ItemPeriodType.Days ? period * 24L : period;
 
         /// <summary>
         /// Removes the item from the inventory

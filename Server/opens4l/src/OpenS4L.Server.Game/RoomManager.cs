@@ -79,12 +79,26 @@ namespace OpenS4L.Server.Game
             if (!_gameRuleResolver.HasGameRule(options))
                 return (null, RoomCreateError.InvalidGameRule);
 
-            var map = _gameDataService.Maps.FirstOrDefault(x => x.Id == options.Map);
+            // Random map placeholders are resolved to a real map here and the room keeps the real
+            // map id, so every room message (room list, enter info, rule change) carries the map
+            // the client has to load when the match starts
+            var map = _gameDataService.GetMap(options.Map, options.GameRule);
             if (map == null)
                 return (null, RoomCreateError.InvalidMap);
 
             if (map.GameRule != options.GameRule)
                 return (null, RoomCreateError.InvalidGameRule);
+
+            var isRandomMap = map.IsRandom;
+            if (isRandomMap)
+            {
+                map = _gameDataService.GetRandomMap(options.GameRule, options.PlayerLimit);
+                if (map == null)
+                    return (null, RoomCreateError.InvalidMap);
+            }
+
+            options.IsRandomMap = isRandomMap;
+            options.Map = map.WireId;
 
             var room = _serviceProvider.GetRequiredService<Room>();
             room.Initialize(this, _idRecycler.GetId(), options);
@@ -135,5 +149,11 @@ namespace OpenS4L.Server.Game
         public int EquipLimit { get; set; }
         public IPEndPoint RelayEndPoint { get; set; }
         public bool IsFriendly { get; set; }
+
+        /// <summary>
+        /// True when the room was created (or its rules changed) with a random map placeholder.
+        /// <see cref="Map"/> then holds the randomly picked real map. Not sent to the client.
+        /// </summary>
+        public bool IsRandomMap { get; set; }
     }
 }

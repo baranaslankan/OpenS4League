@@ -19,6 +19,12 @@ namespace OpenS4L.Server.Game.Data
         public bool IsDestroyable { get; set; }
         public byte MainTab { get; set; }
         public byte SubTab { get; set; }
+
+        /// <summary>
+        /// Costume repair base cost sent in the shop item list. Not stored, so always 0 like the
+        /// legacy server sent. The client prices costume repairs from it, see PlayerItem.CalculateRepair.
+        /// </summary>
+        public int RepairCost { get; set; }
         public IList<ShopItemInfo> ItemInfos { get; set; }
 
         public ShopItem(ShopItemEntity entity, GameDataService gameDataService)

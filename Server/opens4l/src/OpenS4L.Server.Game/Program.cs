@@ -126,6 +126,9 @@ namespace OpenS4L.Server.Game
                         .Configure<CaptainOptions>(context.Configuration
                             .GetSection(nameof(AppOptions.Game))
                             .GetSection(nameof(AppOptions.Game.Captain)))
+                        .Configure<ChaserOptions>(context.Configuration
+                            .GetSection(nameof(AppOptions.Game))
+                            .GetSection(nameof(AppOptions.Game.Chaser)))
                         .Configure<IdGeneratorOptions>(x => x.Id = 0)
                         .AddSingleton<DatabaseService>()
                         .AddDbContext<AuthContext>(x => x.UseNpgsql(appOptions.Database.ConnectionStrings.Auth))
@@ -165,6 +168,7 @@ namespace OpenS4L.Server.Game
                         .AddTransient<BattleRoyal>()
                         .AddTransient<Captain>()
                         .AddTransient<Practice>()
+                        .AddTransient<Chaser>()
                         .AddTransient<Captain>()
                         .AddSingleton<EquipValidator>()
                         .AddTransient<Clan>()
@@ -172,6 +176,7 @@ namespace OpenS4L.Server.Game
                         .AddService<IdGeneratorService>()
                         .AddService<NicknameLookupService>()
                         .AddSingleton<Mappers.GameMapper>()
+                        .AddSingleton<RandomShopService>()
                         .AddHostedServiceEx<ServerlistService>()
                         .AddHostedServiceEx<GameDataService>()
                         .AddHostedServiceEx<ChannelService>()
@@ -179,6 +184,7 @@ namespace OpenS4L.Server.Game
                         .AddHostedServiceEx<IpcService>()
                         .AddHostedServiceEx<PlayerSaveService>()
                         .AddHostedServiceEx<PlayerSaveFlushService>()
+                        .AddHostedServiceEx<ItemExpiryService>()
                         .AddHostedServiceEx<CommandService>();
 
                     pluginHost.OnConfigure(services);

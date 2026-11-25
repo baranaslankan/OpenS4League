@@ -168,6 +168,53 @@ namespace OpenS4L.Server.Game
             return TeamChangeModeError.OK;
         }
 
+        /// <summary>
+        /// Moves a player chosen by the room master to another team.
+        /// When <paramref name="plrToReplace"/> is given (a player of the target team) both players swap teams.
+        /// </summary>
+        public TeamChangeError ChoiceTeamChange(Player plrToMove, Player plrToReplace, TeamId teamId)
+        {
+            if (plrToMove?.Room != Room || plrToReplace != null && plrToReplace.Room != Room)
+                return TeamChangeError.WrongRoom;
+
+            if (Room.GameRule.StateMachine.GameState != GameState.Waiting)
+                return TeamChangeError.GameIsRunning;
+
+            if (plrToMove.Team == null || plrToReplace != null && plrToReplace.Team == null)
+                return TeamChangeError.NotInTeam;
+
+            if (plrToMove.Team.Id == teamId)
+                return TeamChangeError.AlreadyInTeam;
+
+            if (plrToMove.IsReady || plrToReplace != null && plrToReplace.IsReady)
+                return TeamChangeError.PlayerIsReady;
+
+            var sourceTeam = plrToMove.Team;
+            var targetTeam = this[teamId];
+            if (targetTeam == null)
+                return TeamChangeError.InvalidTeam;
+
+            if (plrToReplace == null)
+            {
+                // Join broadcasts RoomChangeTeamAck
+                if (targetTeam.Join(plrToMove) != TeamJoinError.OK)
+                    return TeamChangeError.Full;
+
+                OnPlayerTeamChanged(plrToMove, sourceTeam, targetTeam);
+                return TeamChangeError.OK;
+            }
+
+            if (plrToReplace.Team != targetTeam || plrToReplace.Mode != plrToMove.Mode)
+                return TeamChangeError.InvalidTeam;
+
+            SwapPlayer(plrToMove, plrToReplace);
+            Broadcast(new RoomChangeTeamAckMessage(plrToMove.Account.Id, plrToMove.Team.Id, plrToMove.Mode));
+            Broadcast(new RoomChangeTeamAckMessage(plrToReplace.Account.Id, plrToReplace.Team.Id, plrToReplace.Mode));
+            OnPlayerTeamChanged(plrToMove, sourceTeam, targetTeam);
+            OnPlayerTeamChanged(plrToReplace, targetTeam, sourceTeam);
+            return TeamChangeError.OK;
+        }
+
         public void SwapPlayer(Player a, Player b)
         {
             if (a.Team == b.Team)

@@ -132,6 +132,20 @@ namespace OpenS4L.Plugins.WebApi
                 return Results.Ok();
             });
 
+            // POST /admin/command — runs a server console command (form field "command"), as if it
+            // had been typed into the game server's console. Only console-enabled commands run.
+            app.MapPost("/admin/command", async (HttpRequest request) =>
+            {
+                var form = await request.ReadFormAsync();
+                if (!form.TryGetValue("command", out var command) || string.IsNullOrWhiteSpace(command.ToString()))
+                    return Results.BadRequest(new { error = "Invalid payload" });
+
+                var args = command.ToString().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                logger.Information("Web API console command {Command}", command.ToString());
+                var ok = await services.GetRequiredService<CommandService>().Execute(null, args);
+                return Results.Json(new { ok });
+            });
+
             // POST /admin/ban, /admin/roomkick, /admin/closeroom — JSON bodies
             app.MapPost("/admin/ban", async (HttpRequest request) =>
             {

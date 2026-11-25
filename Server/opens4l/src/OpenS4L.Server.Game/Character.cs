@@ -97,6 +97,15 @@ namespace OpenS4L.Server.Game
                     return;
                 }
 
+                // A period item that ran out while the player was offline is no longer worn; the
+                // character is saved without it on the next write-behind cycle.
+                if (item.IsExpired)
+                {
+                    log.Information("Not equipping expired item ExpireDate={ExpireDate}", item.ExpireDate);
+                    SetDirtyState(true);
+                    return;
+                }
+
                 var error = characterInventory.Add(itemSlot, item);
                 if (error != CharacterInventoryError.OK)
                     log.Warning("Unable to equip item Error={Error}", error);
@@ -161,6 +170,9 @@ namespace OpenS4L.Server.Game
                     return CharacterInventoryError.ItemNotAllowed;
             }
 
+            if (item.IsExpired)
+                return CharacterInventoryError.ItemNotAllowed;
+
             // Replace whatever already occupies the slot instead of failing outright. The
             // client's equip UI is a single click on the new item ("wear this") - it never
             // sends an explicit UnEquip for the old one first. Without this, re-equipping
@@ -169,8 +181,23 @@ namespace OpenS4L.Server.Game
             // SlotAlreadyInUse, which InventoryHandler used to drop silently - the client
             // was then left waiting forever for an ack, appearing as a frozen/unrendered
             // character until another weapon was selected.
-            var (existing, _) = inventory.GetItem(slot);
-            if (existing != null && existing != item)
+            var (existing, slotError) = inventory.GetItem(slot);
+            if (slotError != CharacterInventoryError.OK)
+                return slotError;
+
+            // Clicking equip on the item already in this slot: nothing changes, but the client still
+            // waits for the ack. Add would return SlotAlreadyInUse and leave it hanging.
+            if (existing == item)
+            {
+                CharacterManager.Player.Session.Send(new ItemUseItemAckMessage(Slot, slot, item.Id, UseItemAction.Equip));
+                return CharacterInventoryError.OK;
+            }
+
+            // The item is worn elsewhere (another slot of this character, or another character):
+            // move it. Add would return ItemAlreadyInUse and leave the client hanging.
+            item.CharacterInventory?.Remove(item);
+
+            if (existing != null)
                 inventory.Remove(slot);
 
             return inventory.Add(slot, item);

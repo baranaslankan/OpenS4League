@@ -45,12 +45,17 @@ namespace OpenS4L.Server.Game.Mappers
                 PeriodType = item.PeriodType,
                 Period = item.Period,
                 Color = item.Color,
-                // NOTE: legacy ExpressMapper assigned src.ExpireDate.ToUnixTimeSeconds() (a long) into this
-                // DateTimeOffset-typed member. ExpressMapper has no long->DateTimeOffset conversion, so it
-                // silently left the field at DateTimeOffset.MinValue. We reproduce that EXACT behaviour to
-                // keep the migration wire-identical; the broken ExpireTime is a pre-existing latent bug.
-                ExpireTime = DateTimeOffset.MinValue,
-                Durability = item.Durability,
+                // Deliberate fix of latent mapping bug #1 (tests/OpenS4L.Server.Mapping.Tests/README.md):
+                // legacy ExpressMapper meant to send ExpireDate as unix seconds (-1 = no expiry) but
+                // silently left DateTimeOffset.MinValue. The client reads this int64 as a __time64_t
+                // (_localtime64_s into the item's SYSTEMTIME "ValidTimEnd") and day items count down
+                // against it, so it must be the real expiry.
+                ExpireTime = item.HasExpireDate ? item.ExpireDate : NoExpireTime,
+                // For hour items the client keeps the remaining seconds in the durability slot (an hour
+                // item with a value <= 0 is shown as expired), so send that instead of the durability.
+                Durability = item.PeriodType == ItemPeriodType.Hours
+                    ? RemainingSeconds(item, DateTimeOffset.Now)
+                    : item.Durability,
                 Effects = item.Effects
                     .Select(x => new ItemEffectDto { Effect = x })
                     .OrderBy(x => x.Effect)
@@ -58,6 +63,15 @@ namespace OpenS4L.Server.Game.Mappers
                 EnchantMP = item.EnchantMP,
                 EnchantLevel = item.EnchantLevel
             };
+        }
+
+        /// <summary>ExpireTime sent for items that never expire (unix time -1, as the legacy mapping intended).</summary>
+        public static readonly DateTimeOffset NoExpireTime = DateTimeOffset.FromUnixTimeSeconds(-1);
+
+        private static int RemainingSeconds(PlayerItem item, DateTimeOffset now)
+        {
+            var seconds = (item.ExpireDate - now).TotalSeconds;
+            return seconds <= 0 ? 0 : (int)Math.Min(int.MaxValue, Math.Ceiling(seconds));
         }
 
         // Room -> Room2Dto

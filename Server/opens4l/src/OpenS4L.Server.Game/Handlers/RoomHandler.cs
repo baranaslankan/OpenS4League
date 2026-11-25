@@ -23,7 +23,11 @@ namespace OpenS4L.Server.Game.Handlers
           IHandle<ScoreKillReqMessage>, IHandle<ScoreKillAssistReqMessage>, IHandle<ScoreTeamKillReqMessage>,
           IHandle<ScoreHealAssistReqMessage>, IHandle<ScoreSuicideReqMessage>, IHandle<ScoreGoalReqMessage>,
           IHandle<ScoreReboundReqMessage>, IHandle<ScoreOffenseReqMessage>, IHandle<ScoreOffenseAssistReqMessage>,
-          IHandle<ScoreDefenseReqMessage>, IHandle<ScoreDefenseAssistReqMessage>, IHandle<ScoreMissionScoreReqMessage>
+          IHandle<ScoreDefenseReqMessage>, IHandle<ScoreDefenseAssistReqMessage>, IHandle<ScoreMissionScoreReqMessage>,
+          IHandle<RoomChoiceMasterChangeReqMessage>, IHandle<RoomChoiceTeamChangeReqMessage>,
+          IHandle<GameKickOutRequestReqMessage>, IHandle<GameKickOutVoteResultReqMessage>,
+          IHandle<RoomQuickJoinReqMessage>, IHandle<RoomQuickStartReqMessage>,
+          IHandle<SlaughterAttackPointReqMessage>, IHandle<SlaughterHealPointReqMessage>
     {
         private readonly ILogger<RoomHandler> _logger;
         private readonly EquipValidator _equipValidator;
@@ -412,7 +416,7 @@ namespace OpenS4L.Server.Game.Handlers
             {
                 case RoomLeaveReason.Kicked:
                     // Only the master can kick people and kick is only allowed in the lobby
-                    if (room.Master != plr && room.GameRule.StateMachine.GameState != GameState.Waiting)
+                    if (room.Master != plr || room.GameRule.StateMachine.GameState != GameState.Waiting)
                         return Task.FromResult(true);
 
                     break;
@@ -465,6 +469,143 @@ namespace OpenS4L.Server.Game.Handlers
                 room.Players.Values.Select(x => new MixedTeamBriefingDto(x.Account.Id, x.Team.Id)).ToArray()
             ));
             return Task.FromResult(true);
+        }
+
+        [Firewall(typeof(MustBeInRoom))]
+        [Firewall(typeof(MustBeMaster))]
+        [Firewall(typeof(MustBeGameState), GameState.Waiting)]
+        public Task<bool> OnHandle(MessageContext context, RoomChoiceMasterChangeReqMessage message)
+        {
+            var session = context.GetSession<Session>();
+            var plr = session.Player;
+            var room = plr.Room;
+
+            var target = room.Players.GetValueOrDefault(message.AccountId);
+            if (target == null || target == plr || target.IsInGMMode)
+                return Task.FromResult(true);
+
+            // Master and host always move together (see Room.Join/Leave)
+            room.ChangeMaster(target);
+            room.ChangeHost(target);
+            return Task.FromResult(true);
+        }
+
+        [Firewall(typeof(MustBeInRoom))]
+        [Firewall(typeof(MustBeMaster))]
+        [Firewall(typeof(MustBeGameState), GameState.Waiting)]
+        public Task<bool> OnHandle(MessageContext context, RoomChoiceTeamChangeReqMessage message)
+        {
+            var session = context.GetSession<Session>();
+            var plr = session.Player;
+            var room = plr.Room;
+
+            var plrToMove = room.Players.GetValueOrDefault(message.PlayerToMove);
+            var plrToReplace = message.PlayerToReplace == 0
+                ? null
+                : room.Players.GetValueOrDefault(message.PlayerToReplace);
+
+            var error = TeamChangeError.WrongRoom;
+            if (plrToMove != null && !plrToMove.IsInGMMode &&
+                (message.PlayerToReplace == 0 || plrToReplace != null && !plrToReplace.IsInGMMode))
+            {
+                error = room.TeamManager.ChoiceTeamChange(plrToMove, plrToReplace, message.ToTeam);
+            }
+
+            if (error != TeamChangeError.OK)
+            {
+                // The result codes of this message are unknown, reuse the ones of RoomChangeTeamFailAck
+                session.Send(new RoomChoiceTeamChangeFailAckMessage
+                {
+                    Result = (byte)(error == TeamChangeError.PlayerIsReady
+                        ? ChangeTeamResult.AlreadyReady
+                        : ChangeTeamResult.Full)
+                });
+                return Task.FromResult(true);
+            }
+
+            room.Broadcast(new RoomChoiceTeamChangeAckMessage(
+                message.PlayerToMove, message.PlayerToReplace, message.FromTeam, message.ToTeam
+            ));
+            return Task.FromResult(true);
+        }
+
+        [Firewall(typeof(MustBeInRoom))]
+        public Task<bool> OnHandle(MessageContext context, GameKickOutRequestReqMessage message)
+        {
+            var session = context.GetSession<Session>();
+            var plr = session.Player;
+            var room = plr.Room;
+            var logger = plr.AddContextToLogger(_logger);
+
+            var target = room.Players.GetValueOrDefault(message.Target);
+            var error = room.StartVoteKick(plr, target, message.Reason);
+            if (error != VoteKickError.OK)
+                logger.Debug("Vote kick against {Target} rejected error={Error}", message.Target, error);
+
+            return Task.FromResult(true);
+        }
+
+        [Firewall(typeof(MustBeInRoom))]
+        public Task<bool> OnHandle(MessageContext context, GameKickOutVoteResultReqMessage message)
+        {
+            var session = context.GetSession<Session>();
+            var plr = session.Player;
+
+            plr.Room.CastVoteKick(plr, message.IsYes);
+            return Task.FromResult(true);
+        }
+
+        [Firewall(typeof(MustBeInChannel))]
+        [Firewall(typeof(MustBeInRoom), Invert = true)]
+        public Task<bool> OnHandle(MessageContext context, RoomQuickJoinReqMessage message)
+        {
+            var session = context.GetSession<Session>();
+            var plr = session.Player;
+
+            // The meaning of Unk is unknown, it is only logged
+            plr.AddContextToLogger(_logger).Debug("Quick join unk={Unk}", message.Unk);
+            if (!QuickJoin(plr, null))
+                session.Send(new ServerResultAckMessage(ServerResult.QuickJoinFailed));
+
+            return Task.FromResult(true);
+        }
+
+        [Firewall(typeof(MustBeInChannel))]
+        [Firewall(typeof(MustBeInRoom), Invert = true)]
+        public Task<bool> OnHandle(MessageContext context, RoomQuickStartReqMessage message)
+        {
+            var session = context.GetSession<Session>();
+            var plr = session.Player;
+
+            if (!QuickJoin(plr, (GameRule)message.GameRule))
+                session.Send(new ServerResultAckMessage(ServerResult.QuickJoinFailed));
+
+            return Task.FromResult(true);
+        }
+
+        /// <summary>
+        /// Joins the best open room of the player's channel (no password, not full).
+        /// Waiting rooms first, then the ones with the most players.
+        /// </summary>
+        /// <returns>false if no room could be joined</returns>
+        private static bool QuickJoin(Player plr, GameRule? gameRule)
+        {
+            var rooms = plr.Channel.RoomManager
+                .Where(x => string.IsNullOrEmpty(x.Options.Password) && !x.IsChangingRules)
+                .Where(x => x.Options.GameRule != GameRule.Practice)
+                .Where(x => gameRule == null || x.Options.GameRule == gameRule)
+                .Where(x => x.Players.Values.Count(p => !p.IsInGMMode) < x.Options.PlayerLimit)
+                .OrderBy(x => x.GameRule.StateMachine.GameState == GameState.Waiting ? 0 : 1)
+                .ThenByDescending(x => x.Players.Count)
+                .ToArray();
+
+            foreach (var room in rooms)
+            {
+                if (room.Join(plr) == RoomJoinError.OK)
+                    return true;
+            }
+
+            return false;
         }
 
         [Firewall(typeof(MustBeInRoom))]
@@ -630,6 +771,46 @@ namespace OpenS4L.Server.Game.Handlers
                 return Task.FromResult(true);
 
             room.GameRule.OnScoreSuicide(plr);
+            return Task.FromResult(true);
+        }
+
+        /// <summary>
+        /// Sent by the chaser's client: AccountId is the survivor that hit the chaser, Unk1 the attack
+        /// points and Unk2 the bonus attack points (CSlaughterKillProcessor, 0x55bc10)
+        /// </summary>
+        [Firewall(typeof(MustBeInRoom))]
+        [Firewall(typeof(MustBeGameState), GameState.Playing)]
+        public Task<bool> OnHandle(MessageContext context, SlaughterAttackPointReqMessage message)
+        {
+            var session = context.GetSession<Session>();
+            var plr = session.Player;
+            var room = plr.Room;
+
+            if (!(room.GameRule is GameRules.Chaser chaser))
+                return Task.FromResult(true);
+
+            var attacker = room.Players.GetValueOrDefault(message.AccountId);
+            if (attacker == null)
+                return Task.FromResult(true);
+
+            chaser.OnAttackPoint(plr, attacker, message.Unk1, message.Unk2);
+            return Task.FromResult(true);
+        }
+
+        /// <summary>
+        /// Unk is the hp the sender healed (CSlaughterHealAssistProcessor, 0x55aaa0)
+        /// </summary>
+        [Firewall(typeof(MustBeInRoom))]
+        [Firewall(typeof(MustBeGameState), GameState.Playing)]
+        public Task<bool> OnHandle(MessageContext context, SlaughterHealPointReqMessage message)
+        {
+            var session = context.GetSession<Session>();
+            var plr = session.Player;
+            var room = plr.Room;
+
+            if (room.GameRule is GameRules.Chaser chaser)
+                chaser.OnHealPoint(plr, message.Unk);
+
             return Task.FromResult(true);
         }
 
