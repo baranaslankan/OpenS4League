@@ -31,6 +31,9 @@ namespace OpenS4L.LoadBot
     ///   all-channels      P players in every channel:         --per-channel P
     ///   chat              N bots chatting on the chat server: --count N [--chat-endpoint h:p]
     ///   all-channels-chat P players per channel, M msgs each: --per-channel P --messages M
+    ///   rooms             R rooms of S bots playing a match:  --rooms R --room-size S
+    ///
+    /// Every run ends with a latency table (p50/p95/p99/max per step); --report writes it as JSON.
     ///
     /// Defaults: auth=127.0.0.1:28002, game=&lt;from server list&gt;, user=admin, pass=admin,
     /// stay=0 (forever). A single bot can use one account (--user); for N concurrent bots you
@@ -75,12 +78,16 @@ namespace OpenS4L.LoadBot
                     s.Channel,
                     s.Nickname,
                     s.ChatEndpoint,
-                    s.ChatMessages
+                    s.ChatMessages,
+                    s.Room,
+                    s.RoomMember
                 );
-                bot.Trace = tr => Console.WriteLine($"[bot {s.Index}] TRACE {tr}");
+                if (ctx.Trace)
+                    bot.Trace = tr => Console.WriteLine($"[bot {s.Index}] TRACE {tr}");
                 return bot;
             }).ToArray();
 
+            var startedAt = DateTimeOffset.UtcNow;
             var tasks = bots.Select(b => RunBot(() => b.RunAsync(cts.Token))).ToArray();
 
             Console.CancelKeyPress += (_, e) =>
@@ -92,7 +99,27 @@ namespace OpenS4L.LoadBot
             var completed = await Task.WhenAll(tasks);
 
             var online = completed.Count(r => r);
-            Console.WriteLine($"Done. {online}/{specs.Count} bot(s) reached their channel.");
+            var goal = scenario is RoomsScenario ? "started their match" : "reached their channel";
+            Console.WriteLine($"Done. {online}/{specs.Count} bot(s) {goal}.");
+
+            var stats = Metrics.Snapshot();
+            Console.WriteLine();
+            Console.WriteLine("Latency per step (bot side, includes the network round trip):");
+            Console.Write(Metrics.FormatTable(stats));
+            if (ctx.ReportPath != null)
+            {
+                Metrics.WriteJson(ctx.ReportPath, new
+                {
+                    Scenario = scenario.Name,
+                    Bots = specs.Count,
+                    Succeeded = online,
+                    Auth = ctx.AuthEndPoint.ToString(),
+                    StartedAt = startedAt,
+                    FinishedAt = DateTimeOffset.UtcNow
+                }, stats);
+                Console.WriteLine($"Report written to {ctx.ReportPath}");
+            }
+
             return online == specs.Count ? 0 : 1;
         }
 
@@ -158,6 +185,10 @@ namespace OpenS4L.LoadBot
             uint channel = 4;
             var perChannel = 0;
             var messagesPerBot = 0;
+            var rooms = 1;
+            var roomSize = 2;
+            var rule = GameRule.Deathmatch;
+            byte? map = null;
             IPEndPoint chatEndPoint = null;
             var userSpecified = false;
 
@@ -276,6 +307,58 @@ namespace OpenS4L.LoadBot
                         }
                         break;
 
+                    case "--rooms":
+                        var rm = Next(i, "--rooms"); i++;
+                        if (rm != null)
+                        {
+                            if (int.TryParse(rm, out var r) && r >= 1 && r <= 200)
+                                rooms = r;
+                            else
+                                errors.Add($"invalid --rooms '{rm}' (1-200)");
+                        }
+                        break;
+
+                    case "--room-size":
+                        var rs = Next(i, "--room-size"); i++;
+                        if (rs != null)
+                        {
+                            if (int.TryParse(rs, out var size) && size >= 1 && size <= 16)
+                                roomSize = size;
+                            else
+                                errors.Add($"invalid --room-size '{rs}' (1-16)");
+                        }
+                        break;
+
+                    case "--rule":
+                        var ru = Next(i, "--rule"); i++;
+                        if (ru != null)
+                        {
+                            if (Enum.TryParse<GameRule>(ru, true, out var parsedRule))
+                                rule = parsedRule;
+                            else
+                                errors.Add($"invalid --rule '{ru}' (e.g. deathmatch, touchdown)");
+                        }
+                        break;
+
+                    case "--map":
+                        var mp = Next(i, "--map"); i++;
+                        if (mp != null)
+                        {
+                            if (byte.TryParse(mp, out var parsedMap))
+                                map = parsedMap;
+                            else
+                                errors.Add($"invalid --map '{mp}' (0-255)");
+                        }
+                        break;
+
+                    case "--report":
+                        ctx.ReportPath = Next(i, "--report"); i++;
+                        break;
+
+                    case "--trace":
+                        ctx.Trace = true;
+                        break;
+
                     default:
                         errors.Add($"unknown argument '{args[i]}'");
                         break;
@@ -298,14 +381,20 @@ namespace OpenS4L.LoadBot
                 "chat" => new ChatScenario(count, chatEndPoint ?? new IPEndPoint(IPAddress.Loopback, 28003)),
                 "all-channels-chat" => new AllChannelsChatScenario(
                     perChannel, messagesPerBot, chatEndPoint ?? new IPEndPoint(IPAddress.Loopback, 28003)),
+                "rooms" => new RoomsScenario(rooms, roomSize, channel, rule, map ?? DefaultMap(rule)),
                 _ => null
             };
 
             if (scenario == null)
-                errors.Add($"unknown scenario '{scenarioName}' (known: single-channel, all-channels, chat, all-channels-chat)");
+                errors.Add($"unknown scenario '{scenarioName}' (known: single-channel, all-channels, chat, all-channels-chat, rooms)");
+            else if (scenario is RoomsScenario && rooms * roomSize > 1 && ctx.UserPrefix == null)
+                errors.Add("the rooms scenario with more than one bot needs --user-prefix (one account per bot)");
 
             return (scenario, ctx, errors);
         }
+
+        /// <summary>A map whose map.x7 mode matches the rule (2 = Neden-1, 61 = Colosseum).</summary>
+        private static byte DefaultMap(GameRule rule) => rule == GameRule.Touchdown ? (byte)61 : (byte)2;
 
         private static bool TryParseEndPoint(string s, out IPEndPoint endpoint)
         {
@@ -334,6 +423,8 @@ Global:
   --user-prefix <s>     Each bot logs in as its own account {prefix}{i} (provision with
                         `make provision-bots BOTS=N`). Needed for N concurrent bots.
                         Mutually exclusive with --user.
+  --report <file>       Also write the latency table as JSON
+  --trace               Print every protocol message (noisy; off by default)
 
 Scenarios:
   single-channel   N bots into one channel (default):
@@ -347,6 +438,14 @@ Scenarios:
                    (each bot also logs into auth+game first so its player/nickname exist)
   all-channels-chat  P players in every channel, each sending M chat messages:
                    --per-channel P --messages M [--chat-endpoint host:port]
-                   (with 11 channels and P=10 that's 110 bots, 10 per channel, 10 msgs each)";
+                   (with 11 channels and P=10 that's 110 bots, 10 per channel, 10 msgs each)
+  rooms            R rooms of S bots in one channel, each room starting a match:
+                   --rooms R (default 1) --room-size S (default 2) [--channel id]
+                   [--rule deathmatch|touchdown|... (default deathmatch)]
+                   [--map id (default: 2 for deathmatch, 61 for touchdown; must suit the rule)]
+                   (bot 0 of each room creates it, the others join and ready up, the master
+                    starts the round; R*S accounts needed, e.g. make provision-bots BOTS=40)
+
+Output: a latency table per step (count, failures, p50/p95/p99/max in ms) after the run.";
     }
 }

@@ -46,6 +46,41 @@ make loadbot SCENARIO=chat BOTS=10 MESSAGES=10 USERPREFIX=bot STAY=120
 make loadbot SCENARIO=all-channels-chat PER_CHANNEL=10 MESSAGES=10 USERPREFIX=bot STAY=180
 ```
 
+## Rooms and latency
+
+The `rooms` scenario puts the bots into matches: per room, bot 0 creates it (`RoomMakeReq2`), the
+others join (`RoomEnterReq`), everyone but the master readies up, the master starts the round and
+every bot reports loading done until the server sends the game-start ack.
+
+```sh
+make provision-bots BOTS=40
+make loadbot SCENARIO=rooms ROOMS=10 ROOM_SIZE=4 USERPREFIX=bot STAY=60 REPORT=load.json
+# options: RULE=touchdown (default map 61), MAP=<id> (must suit the rule), CHANNEL=<id>
+```
+
+Every scenario ends with a latency table, and `--report <file>` (`REPORT=` in make) writes it as
+JSON. Times are taken on the bot from just before a request is sent to when its reply arrives, so
+they include the network round trip:
+
+| Step | From → to |
+|---|---|
+| `auth.connect`, `game.connect`, `chat.connect` | TCP connect → ProudNet handshake done (RSA + AES key exchange) |
+| `auth.login` | `LoginEUReq` → `LoginEUAck` |
+| `auth.serverlist` | `ServerListReq` → `ServerListAck` |
+| `game.login` | `LoginRequestReq` → `LoginReguestAck` |
+| `game.channel` | `ChannelEnterReq` → `ServerResultAck(ChannelEnter)` |
+| `room.make` / `room.enter` | make or enter request → `RoomChangeMasterAck` (join finished) |
+| `room.ready` | `RoomReadyRoundReq2` → own `RoomReadyRoundAck` |
+| `room.loading` | master's `RoomBeginRoundReq2` → this bot's `RoomGameLoadingAck` |
+| `room.start` | `GameLoadingSuccessReq` → `RoomGameStartAck`; **includes the server's 5 s start countdown** |
+| `chat.login` | `LoginReq` → `LoginAck` |
+| `ping.auth`, `ping.game`, `ping.chat` | keep-alive `ReliablePing` → `ReliablePong`, every 500 ms per connection |
+
+Not simulated: the relay (P2P) connection and in-match traffic (movement, shots, scores). The
+`ping.*` rows are the closest thing to in-match network latency the bots measure. Run the bots
+from another machine (e.g. `--auth <public-ip>:28002`) to measure over a real network rather than
+loopback. Protocol traces are off by default; `--trace` (`TRACE=1`) turns them on.
+
 Directly:
 
 ```sh

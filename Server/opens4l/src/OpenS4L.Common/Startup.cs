@@ -50,6 +50,9 @@ namespace OpenS4L.Common
             var configuration = new ConfigurationBuilder()
                 .SetBasePath(AppDomain.CurrentDomain.BaseDirectory)
                 .AddHjsonFile(configFile, false, true)
+                // Deployment overrides without editing config.hjson, e.g.
+                // OPENS4L_ServerList__Address=203.0.113.7 or OPENS4L_Database__ConnectionStrings__Game=...
+                .AddEnvironmentVariables("OPENS4L_")
                 .Build();
 
             var loggerOptions = loggerOptionsFactory(configuration);

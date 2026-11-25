@@ -50,7 +50,14 @@ A probe that references the repo's own `OpenS4L.Network` and round-trips 100 kB 
 in `Server/Docker/compose.yaml`. Game runs emulated (`uname -m` = `x86_64`). Auth, Chat and Relay
 stay native arm64 because they never call LZO. On x64 hosts the setting changes nothing.
 
-Consequences:
+**Update (superseded):** the game service now runs natively on linux/arm64. `Server/Docker/game/Dockerfile`
+adds the distro's `liblzo2` to the ASP.NET 10 runtime image as `/usr/lib/MiniLzo.so`. On arm64 the x64
+copy in the app folder fails to load, so the runtime falls back to this one; on x64 the shipped copy loads
+first. The same 100 kB probe on native arm64 gives the same output as x64: 100000 → 46393 bytes, identical
+SHA-256, roundtrip equal. The `platform: linux/amd64` pin is gone. Running Game with `dotnet run` directly
+on macOS still fails, because there is no osx-arm64 build of the library.
+
+Consequences (of the original amd64 pin):
 - Running the **Game server natively on macOS** (`dotnet run`) will throw the first time a client
   requests shop data. Use the Docker stack for Game.
 - Emulation costs some CPU. Fine for development; production should be a linux/amd64 host.

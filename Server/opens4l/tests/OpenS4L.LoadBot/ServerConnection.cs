@@ -12,8 +12,8 @@ namespace OpenS4L.LoadBot
     public class ServerConnection : IDisposable
     {
         private readonly object _lock = new object();
-        private readonly List<(Type Type, TaskCompletionSource<object> Tcs)> _waiters =
-            new List<(Type, TaskCompletionSource<object>)>();
+        private readonly List<(Type Type, Func<object, bool> Match, TaskCompletionSource<object> Tcs)> _waiters =
+            new List<(Type, Func<object, bool>, TaskCompletionSource<object>)>();
 
         public ProudNetClient Client { get; }
 
@@ -25,11 +25,11 @@ namespace OpenS4L.LoadBot
 
         private void OnMessage(object sender, MessageEventArgs e)
         {
-            (Type, TaskCompletionSource<object>)[] matched;
+            (Type, Func<object, bool>, TaskCompletionSource<object>)[] matched;
             lock (_lock)
             {
                 matched = _waiters
-                    .Where(w => w.Type.IsInstanceOfType(e.Message))
+                    .Where(w => w.Type.IsInstanceOfType(e.Message) && (w.Match == null || w.Match(e.Message)))
                     .ToArray();
 
                 foreach (var w in matched)
@@ -37,17 +37,23 @@ namespace OpenS4L.LoadBot
             }
 
             foreach (var w in matched)
-                w.Item2.TrySetResult(e.Message);
+                w.Item3.TrySetResult(e.Message);
         }
 
         /// <summary>Wait for the next inbound message of type <typeparamref name="T"/>.</summary>
-        public Task<T> WaitFor<T>(TimeSpan timeout) where T : class
+        /// <remarks>
+        /// The waiter is registered when this is called, so call it before sending the request whose
+        /// reply it awaits; otherwise a fast reply can arrive before anyone is waiting for it.
+        /// </remarks>
+        public async Task<T> WaitFor<T>(TimeSpan timeout, Func<T, bool> match = null) where T : class
         {
             var tcs = new TaskCompletionSource<object>(TaskCreationOptions.RunContinuationsAsynchronously);
+            Func<object, bool> predicate = match == null ? null : m => match((T)m);
             lock (_lock)
-                _waiters.Add((typeof(T), tcs));
+                _waiters.Add((typeof(T), predicate, tcs));
 
-            return tcs.Task.WaitAsync(timeout).ContinueWith(t => (T)t.Result);
+            // Awaited (not ContinueWith) so a timeout surfaces as TimeoutException, not AggregateException.
+            return (T)await tcs.Task.WaitAsync(timeout);
         }
 
         public void Dispose()

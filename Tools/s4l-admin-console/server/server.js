@@ -15,6 +15,8 @@ const { execFile } = require('child_process');
 const PORT = process.env.PORT || 8020;
 // The Game server's WebApi plugin (Kestrel) — serves /statistics, /channels, /players, /rooms.
 const GAME_API = process.env.GAME_API || 'http://127.0.0.1:22000';
+// Sent as X-Admin-Key on /admin/* when the WebApi has an AdminKey set (OPENS4L_WEBAPI_ADMINKEY).
+const ADMIN_KEY = process.env.ADMIN_KEY || '';
 // The Chat server's tiny metrics endpoint — serves /statistics with MessagesSent etc.
 const CHAT_API = process.env.CHAT_API || 'http://127.0.0.1:28006';
 
@@ -416,7 +418,9 @@ function proxyAdmin(action, formData, jsonBody) {
     const req = http.request(target, {
       method: 'POST',
       timeout: 8000,
-      headers: { 'Content-Type': contentType, 'Content-Length': Buffer.byteLength(body) },
+      headers: Object.assign(
+        { 'Content-Type': contentType, 'Content-Length': Buffer.byteLength(body) },
+        ADMIN_KEY ? { 'X-Admin-Key': ADMIN_KEY } : {}),
     }, (res) => {
       let data = '';
       res.setEncoding('utf8');

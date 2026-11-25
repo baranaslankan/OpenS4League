@@ -49,7 +49,10 @@ namespace OpenS4L.Plugins.WebApi
                 o.SerializerOptions.PropertyNamingPolicy = null);
 
             _app = builder.Build();
-            Endpoints.Map(_app, _services, _logger, new Mappers.WebApiMapper(_gameDataService));
+            Endpoints.Map(_app, _services, _logger, new Mappers.WebApiMapper(_gameDataService), _options.AdminKey);
+            if (string.IsNullOrEmpty(_options.AdminKey))
+                _logger.Warning("Web API has no AdminKey: /admin/* is open to anyone who can reach {Listener}",
+                    _options.Listener);
 
             await _app.StartAsync(cancellationToken);
             _logger.Information("Web API listening on {Listener}", _options.Listener);

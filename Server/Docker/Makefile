@@ -1,7 +1,7 @@
 # OpenS4L — Docker run helper (Windows-first: git-bash/MSYS make + docker).
 # Builds/publishes the servers, stages the plugins, then brings up the compose stack.
 
-.PHONY: help build publish plugins up bootstrap provision provision-bots logs down clean loadtest loadtest-smoke loadtest-load loadtest-hundred loadtest-soak loadbot loadbot-help
+.PHONY: help build publish plugins up bootstrap provision provision-bots logs down clean loadtest loadtest-smoke loadtest-load loadtest-hundred loadtest-soak loadbot loadbot-help prod-up prod-provision prod-provision-bots prod-down prod-config prod-secure prod-account
 
 # k6 load tests for the WebApi HTTP plugin (port 22000), via the official
 # grafana/k6 image (no local install; identical on macOS/Windows/Linux).
@@ -11,7 +11,7 @@
 K6_IMAGE ?= grafana/k6:latest
 TARGET_URL ?= http://host.docker.internal:22000
 
-# Load-bot scenario (single-channel | all-channels | chat | all-channels-chat). Used by `loadbot`.
+# Load-bot scenario (single-channel | all-channels | chat | all-channels-chat | rooms). Used by `loadbot`.
 SCENARIO ?= single-channel
 
 COMPOSE = docker compose
@@ -43,6 +43,37 @@ plugins: ## Stage plugin DLLs (+ config .hjson, + deps) into per-server plugins/
 
 up: ## Bring up the stack (PostgreSQL + Redis + 4 servers). Run `make publish` first.
 	$(COMPOSE) up -d
+
+# Public deployment: compose.prod.yaml layered on compose.yaml, settings from prod.env (see prod.env.example).
+COMPOSE_PROD = $(COMPOSE) --env-file prod.env -f compose.yaml -f compose.prod.yaml
+
+prod-config: ## Print the merged prod compose config (checks prod.env is complete)
+	$(COMPOSE_PROD) config
+
+prod-up: ## Bring up the public stack (game ports + Caddy status page). Run `make publish` first.
+	$(COMPOSE_PROD) up -d --build
+
+prod-provision: ## Create the admin account from prod.env + load the shop (idempotent)
+	$(COMPOSE_PROD) run --rm provision
+	$(COMPOSE_PROD) up -d --force-recreate game
+
+prod-provision-bots: ## Create load-test accounts bot0..botN-1 with BOT_PASSWORD from prod.env (make prod-provision-bots BOTS=40)
+	$(COMPOSE_PROD) run --rm -e ONLY_BOTS=1 -e BOT_COUNT=$(if $(BOTS),$(BOTS),40) provision
+
+prod-secure: ## Reset the admin and bot passwords to ADMIN_PASSWORD / BOT_PASSWORD from prod.env (accounts made with the dev defaults)
+	$(COMPOSE_PROD) build provision
+	$(COMPOSE_PROD) run --rm --entrypoint sh provision -c \
+	  'ACCOUNT_PASSWORD="$$ADMIN_PASSWORD" python /accounts.py set "$$ADMIN_USER" && python /accounts.py bots'
+
+prod-account: ## Create a player account, or reset its password: make prod-account NAME=alice (prints the new password once)
+	@test -n "$(NAME)" || { echo "usage: make prod-account NAME=<username>"; exit 1; }
+	@$(COMPOSE_PROD) build -q provision
+	@PW=$$(openssl rand -hex 6); \
+	  $(COMPOSE_PROD) run --rm -e ACCOUNT_PASSWORD=$$PW --entrypoint python provision /accounts.py set "$(NAME)" \
+	  && echo "username: $(NAME)   password: $$PW"
+
+prod-down: ## Stop the public stack (keeps the database volume)
+	$(COMPOSE_PROD) down
 
 bootstrap: ## Full first-time bring-up: publish, stage plugins, up, provision, reload game
 	$(MAKE) publish
@@ -117,7 +148,10 @@ loadbot: ## Simulate N real-game-protocol players (default BOTS=1, CHANNEL=4, PA
 	    $(if $(CHAT),--chat-endpoint $(CHAT),),) \
 	  $(if $(filter all-channels-chat,$(SCENARIO)),--per-channel $(if $(PER_CHANNEL),$(PER_CHANNEL),1) \
 	    --messages $(if $(MESSAGES),$(MESSAGES),10) \
-	    $(if $(CHAT),--chat-endpoint $(CHAT),),)
+	    $(if $(CHAT),--chat-endpoint $(CHAT),),) \
+	  $(if $(filter rooms,$(SCENARIO)),--rooms $(if $(ROOMS),$(ROOMS),1) --room-size $(if $(ROOM_SIZE),$(ROOM_SIZE),2) \
+	    --channel $(if $(CHANNEL),$(CHANNEL),4) $(if $(RULE),--rule $(RULE),) $(if $(MAP),--map $(MAP),),) \
+	  $(if $(REPORT),--report $(REPORT),) $(if $(TRACE),--trace,)
 
 loadbot-help: ## Explain all loadbot scenarios + parameters
 	@echo ""
@@ -137,6 +171,9 @@ loadbot-help: ## Explain all loadbot scenarios + parameters
 	@echo "  all-channels     P players in every existing channel (discovers them from /channels)."
 	@echo "  chat             N bots that also log into the chat server and send channel chat."
 	@echo "  all-channels-chat  P players in every channel, each sending M chat messages."
+	@echo "  rooms            R rooms of S bots; each room is created, joined, readied and started."
+	@echo ""
+	@echo "Every run ends with a latency table per step (p50/p95/p99/max ms, bot side)."
 	@echo ""
 	@echo "EXAMPLES"
 	@echo "  make loadbot                                   # 1 bot -> channel 4 (admin/admin)"
@@ -146,9 +183,11 @@ loadbot-help: ## Explain all loadbot scenarios + parameters
 	@echo "  make loadbot SCENARIO=chat BOTS=10 USERPREFIX=bot STAY=120   # 10 chatting bots"
 	@echo "  make loadbot SCENARIO=all-channels-chat PER_CHANNEL=10 MESSAGES=10 USERPREFIX=bot"
 	@echo "                     # 10 players in every channel, each sending 10 chat msgs"
+	@echo "  make loadbot SCENARIO=rooms ROOMS=10 ROOM_SIZE=4 USERPREFIX=bot STAY=60 REPORT=load.json"
+	@echo "                     # 10 four-player deathmatch rooms, latency report as JSON"
 	@echo ""
 	@echo "PARAMETERS (environment overrides)"
-	@echo "  SCENARIO     single-channel | all-channels | chat | all-channels-chat"
+	@echo "  SCENARIO     single-channel | all-channels | chat | all-channels-chat | rooms"
 	@echo "               (default single-channel)"
 	@echo "  BOTS         number of bots / players (count)         (default 1)"
 	@echo "  CHANNEL      channel id for single-channel            (default 4)"
@@ -159,6 +198,12 @@ loadbot-help: ## Explain all loadbot scenarios + parameters
 	@echo "  PASSWORD     account / bot password                   (default admin)"
 	@echo "  NICKPREFIX   nickname prefix                          (default bot)"
 	@echo "  STAY         seconds to stay online, 0=forever        (default 0)"
+	@echo "  ROOMS        rooms for the rooms scenario             (default 1)"
+	@echo "  ROOM_SIZE    bots per room                            (default 2)"
+	@echo "  RULE         game rule, e.g. deathmatch, touchdown    (default deathmatch)"
+	@echo "  MAP          map id; must suit RULE (default: 2 deathmatch, 61 touchdown)"
+	@echo "  REPORT       also write the latency table to this JSON file"
+	@echo "  TRACE        any value: print every protocol message (noisy)"
 	@echo "  AUTH         auth endpoint host:port                  (default 127.0.0.1:28002)"
 	@echo "  GAME         game endpoint host:port (override server list) (default: auto)"
 	@echo "  CHAT         chat endpoint host:port for chat scenario(default 127.0.0.1:28003)"

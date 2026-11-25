@@ -77,6 +77,49 @@ permanent with correct client tabs.
 
 Later runs: `make up` then `make provision` if you reset the DB.
 
+## Public deployment and status page
+
+`compose.prod.yaml` layers a public profile on top of `compose.yaml` (for example on an Oracle
+Cloud Always Free Ampere VM; the game image runs natively on arm64). Step-by-step for Oracle,
+including the cloud firewall, copying the build and game data, and a remote load test:
+[`docs/ORACLE-DEPLOY.md`](../../docs/ORACLE-DEPLOY.md). To host on your own Mac instead, with players
+joining over Tailscale (no cloud account, no card): [`docs/HOME-HOST.md`](../../docs/HOME-HOST.md).
+The auth server has no sign-up; `make prod-account NAME=<user>` creates player accounts.
+
+```sh
+cp prod.env.example prod.env   # PUBLIC_IP, POSTGRES_PASSWORD, ADMIN_KEY, ADMIN_PASSWORD
+make publish
+make prod-config               # fails fast if prod.env is incomplete
+make prod-up
+make prod-provision
+```
+
+- Published: auth 28002, chat 28003, game 28104, relay 28005 + UDP 29000-29001, and Caddy on
+  80/443. Postgres and Redis are not published; the WebApi (22000) stays on 127.0.0.1.
+- The servers advertise `PUBLIC_IP` through `OPENS4L_*` environment variables (any config key
+  can be overridden that way, e.g. `OPENS4L_ServerList__Address`), so `config.hjson` stays as is.
+- `/admin/*` on the WebApi needs the `X-Admin-Key` header once `ADMIN_KEY` is set; the admin
+  console sends it from its own `ADMIN_KEY` environment variable.
+- Caddy serves `status/index.html` and passes only read-only routes through `/api`
+  (`/statistics`, `/metrics`, `/channels`, `/gamedata/maps`). `/players` and `/rooms` stay
+  private: they carry nicknames, account ids and room passwords.
+
+The status page polls `/api/metrics` every 5 s: players, rooms per game mode, channel load and
+the game server's CPU and memory. To show load-test latency on it, write a load-bot report next
+to it (gitignored):
+
+```sh
+make loadbot SCENARIO=rooms ROOMS=10 ROOM_SIZE=4 USERPREFIX=bot STAY=60 REPORT=$PWD/status/loadtest.json
+```
+
+To preview the page against the local stack:
+
+```sh
+docker run --rm -d --name opens4l-caddy-dev --network opens4l_default -p 127.0.0.1:8088:80 \
+  -v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro" -v "$PWD/status:/srv/status:ro" caddy:2-alpine
+# open http://localhost:8088
+```
+
 ## Layout
 
 ```
