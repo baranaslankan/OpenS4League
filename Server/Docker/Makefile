@@ -1,7 +1,7 @@
 # OpenS4L — Docker run helper (Windows-first: git-bash/MSYS make + docker).
 # Builds/publishes the servers, stages the plugins, then brings up the compose stack.
 
-.PHONY: help build publish plugins up bootstrap provision provision-bots logs down clean loadtest loadtest-smoke loadtest-load loadtest-hundred loadtest-soak loadbot loadbot-help prod-up prod-provision prod-provision-bots prod-down prod-config
+.PHONY: help build publish plugins up bootstrap provision provision-bots logs down clean loadtest loadtest-smoke loadtest-load loadtest-hundred loadtest-soak loadbot loadbot-help prod-up prod-provision prod-provision-bots prod-down prod-config prod-secure prod-account
 
 # k6 load tests for the WebApi HTTP plugin (port 22000), via the official
 # grafana/k6 image (no local install; identical on macOS/Windows/Linux).
@@ -59,6 +59,18 @@ prod-provision: ## Create the admin account from prod.env + load the shop (idemp
 
 prod-provision-bots: ## Create load-test accounts bot0..botN-1 with BOT_PASSWORD from prod.env (make prod-provision-bots BOTS=40)
 	$(COMPOSE_PROD) run --rm -e ONLY_BOTS=1 -e BOT_COUNT=$(if $(BOTS),$(BOTS),40) provision
+
+prod-secure: ## Reset the admin and bot passwords to ADMIN_PASSWORD / BOT_PASSWORD from prod.env (accounts made with the dev defaults)
+	$(COMPOSE_PROD) build provision
+	$(COMPOSE_PROD) run --rm --entrypoint sh provision -c \
+	  'ACCOUNT_PASSWORD="$$ADMIN_PASSWORD" python /accounts.py set "$$ADMIN_USER" && python /accounts.py bots'
+
+prod-account: ## Create a player account, or reset its password: make prod-account NAME=alice (prints the new password once)
+	@test -n "$(NAME)" || { echo "usage: make prod-account NAME=<username>"; exit 1; }
+	@$(COMPOSE_PROD) build -q provision
+	@PW=$$(openssl rand -hex 6); \
+	  $(COMPOSE_PROD) run --rm -e ACCOUNT_PASSWORD=$$PW --entrypoint python provision /accounts.py set "$(NAME)" \
+	  && echo "username: $(NAME)   password: $$PW"
 
 prod-down: ## Stop the public stack (keeps the database volume)
 	$(COMPOSE_PROD) down

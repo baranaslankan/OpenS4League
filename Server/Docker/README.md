@@ -82,7 +82,9 @@ Later runs: `make up` then `make provision` if you reset the DB.
 `compose.prod.yaml` layers a public profile on top of `compose.yaml` (for example on an Oracle
 Cloud Always Free Ampere VM; the game image runs natively on arm64). Step-by-step for Oracle,
 including the cloud firewall, copying the build and game data, and a remote load test:
-[`docs/ORACLE-DEPLOY.md`](../../docs/ORACLE-DEPLOY.md).
+[`docs/ORACLE-DEPLOY.md`](../../docs/ORACLE-DEPLOY.md). To host on your own Mac instead, with players
+joining over Tailscale (no cloud account, no card): [`docs/HOME-HOST.md`](../../docs/HOME-HOST.md).
+The auth server has no sign-up; `make prod-account NAME=<user>` creates player accounts.
 
 ```sh
 cp prod.env.example prod.env   # PUBLIC_IP, POSTGRES_PASSWORD, ADMIN_KEY, ADMIN_PASSWORD

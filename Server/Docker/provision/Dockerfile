@@ -4,5 +4,6 @@
 FROM python:3.12-slim
 RUN pip install --no-cache-dir psycopg2-binary
 COPY provision.py /provision.py
+COPY accounts.py /accounts.py
 WORKDIR /
 ENTRYPOINT ["python", "/provision.py"]
