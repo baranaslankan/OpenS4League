@@ -115,7 +115,7 @@ namespace OpenS4L.Server.Mapping.Tests
         }
 
         [Fact]
-        public async Task Online_expiredItemIsUnequippedAndRefreshedOnce()
+        public async Task Online_expiredItemIsUnequippedAndDeleted()
         {
             var (plr, channel) = await LoginAsync(9702);
             var (character, _) = plr.CharacterManager.Create(0, CharacterGender.Male, 0, 0, 0, 0, 0, 0);
@@ -129,13 +129,11 @@ namespace OpenS4L.Server.Mapping.Tests
             Assert.Same(item, Assert.Single(changed));
             Assert.Null(item.CharacterInventory);
             Assert.DoesNotContain(item, character.Weapons.GetItems());
-            Assert.Contains(plr.Inventory, x => x.Id == item.Id); // kept, shown as expired
+            Assert.DoesNotContain(plr.Inventory, x => x.Id == item.Id);
 
             var messages = Messages(channel);
             Assert.Contains(messages.OfType<ItemUseItemAckMessage>(), m => m.ItemId == item.Id && m.Action == UseItemAction.UnEquip);
-            var update = messages.OfType<ItemUpdateInventoryAckMessage>().Last(m => m.Item.Id == item.Id);
-            Assert.Equal(InventoryAction.Update, update.Action);
-            Assert.Equal(item.ExpireDate.ToUnixTimeSeconds(), update.Item.ExpireTime.ToUnixTimeSeconds());
+            Assert.Contains(messages.OfType<ItemInventroyDeleteAckMessage>(), m => m.ItemId == item.Id);
 
             Assert.Empty(plr.Inventory.UpdateExpiredItems(later.AddMinutes(1)));
         }
@@ -158,22 +156,17 @@ namespace OpenS4L.Server.Mapping.Tests
         }
 
         [Fact]
-        public async Task ExpiredItem_cannotBeEquippedButCanBeDiscarded()
+        public async Task ExpiredItem_isDroppedWhenLoadedAndQueuedForDelete()
         {
-            var (plr, channel) = await LoginAsync(9704);
-            var (character, _) = plr.CharacterManager.Create(0, CharacterGender.Male, 0, 0, 0, 0, 0, 0);
+            var (plr, _) = await LoginAsync(9704);
             var item = SeedItem(9704, PriceId(1), DateTimeOffset.Now.AddDays(-8), plr);
 
-            Assert.True(item.IsExpired);
-            Assert.Equal(CharacterInventoryError.ItemNotAllowed, character.Equip(item, (byte)WeaponSlot.Weapon1));
-
-            await _ctx.Get<InventoryHandler>().OnHandle(new MessageContext { Session = plr.Session },
-                new ItemDiscardItemReqMessage { ItemId = item.Id });
-            Assert.DoesNotContain(plr.Inventory, x => x.Id == item.Id);
+            Assert.Null(item);
+            Assert.True(plr.Inventory.HasPendingChanges);
         }
 
         [Fact]
-        public async Task Login_expiredEquippedItemIsNotWornAndListedWithItsExpiry()
+        public async Task Login_expiredEquippedItemIsDeletedAndNotListed()
         {
             const uint accountId = 9705;
             var bought = DateTimeOffset.Now.AddDays(-40);
@@ -212,17 +205,15 @@ namespace OpenS4L.Server.Mapping.Tests
             var (plr, channel) = await LoginAsync(accountId, seedPlayer: false);
 
             var character = plr.CharacterManager.GetCharacter(0);
-            var expired = plr.Inventory[970501];
-            Assert.True(expired.IsExpired);
-            Assert.Null(expired.CharacterInventory);
+            Assert.Null(plr.Inventory[970501]);
+            Assert.Null(character.Weapons.GetItems()[(int)WeaponSlot.Weapon1]);
             Assert.Same(plr.Inventory[970502], character.Weapons.GetItems()[(int)WeaponSlot.Weapon2]);
 
             var list = Messages(channel).OfType<ItemInventoryInfoAckMessage>().Single();
-            Assert.Equal(bought.AddDays(30).ToUnixTimeSeconds(),
-                list.Items.Single(x => x.Id == 970501).ExpireTime.ToUnixTimeSeconds());
+            Assert.DoesNotContain(list.Items, x => x.Id == 970501);
             Assert.Equal(-1L, list.Items.Single(x => x.Id == 970502).ExpireTime.ToUnixTimeSeconds());
 
-            // Already handled at login: the online check has nothing new to tell the client.
+            // Already handled at login: the online check has nothing left to expire.
             Assert.Empty(plr.Inventory.UpdateExpiredItems(DateTimeOffset.Now));
         }
 

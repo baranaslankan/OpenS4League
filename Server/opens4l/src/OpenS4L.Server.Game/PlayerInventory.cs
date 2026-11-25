@@ -26,9 +26,6 @@ namespace OpenS4L.Server.Game
         private readonly GameMapper _mapper;
         private readonly ConcurrentDictionary<ulong, PlayerItem> _items;
         private readonly ConcurrentStack<PlayerItem> _itemsToRemove;
-        // Period items already handled as expired (unequipped, client told) - in memory only, the
-        // expiry itself is derived from PurchaseDate + period so nothing needs persisting.
-        private readonly ConcurrentDictionary<ulong, byte> _expiredItems = new ConcurrentDictionary<ulong, byte>();
         private ILogger _logger;
 
         public Player Player { get; private set; }
@@ -80,39 +77,35 @@ namespace OpenS4L.Server.Game
                         entityItem.Id, entityItem.ShopItemInfoId, entityItem.ShopPriceId);
                     continue;
                 }
-                _items.TryAdd(item.Id, item);
-
-                // Already expired at login: the inventory list carries the expiry, so the client shows
-                // it as expired by itself; Character skips equipping it.
+                // Already expired at login: deleted, never listed. Characters loaded after this don't
+                // find it and drop it from their slots; the save clears their references before deleting.
                 if (item.IsExpired)
-                    _expiredItems.TryAdd(item.Id, 0);
+                {
+                    _logger.Information("Deleting expired item Id={ItemId} ItemNumber={ItemNumber} ExpireDate={ExpireDate}",
+                        item.Id, item.ItemNumber, item.ExpireDate);
+                    _itemsToRemove.Push(item);
+                    continue;
+                }
+
+                _items.TryAdd(item.Id, item);
             }
         }
 
         /// <summary>
         /// Handles period items whose time ran out: unequips them from their character (the client gets
-        /// the usual UnEquip ack) and sends the refreshed item once, so it shows as expired. Expired
-        /// items stay in the inventory like on the original server; they just stop working.
-        /// Returns the items that changed.
+        /// the usual UnEquip ack), then deletes them from the inventory (the client gets the delete ack).
+        /// Returns the deleted items.
         /// </summary>
         public IReadOnlyList<PlayerItem> UpdateExpiredItems(DateTimeOffset now)
         {
-            var changed = new List<PlayerItem>();
-            foreach (var item in _items.Values)
+            var expired = _items.Values.Where(x => x.IsExpiredAt(now)).ToList();
+            foreach (var item in expired)
             {
-                if (!item.IsExpiredAt(now))
-                    continue;
-
-                var unequipped = item.CharacterInventory?.Remove(item) == true;
-                var newlyExpired = _expiredItems.TryAdd(item.Id, 0);
-                if (newlyExpired)
-                    Player.Session.Send(new ItemUpdateInventoryAckMessage(InventoryAction.Update, _mapper.ToItemDto(item)));
-
-                if (newlyExpired || unequipped)
-                    changed.Add(item);
+                item.CharacterInventory?.Remove(item);
+                Remove(item);
             }
 
-            return changed;
+            return expired;
         }
 
         /// <summary>
@@ -337,7 +330,6 @@ namespace OpenS4L.Server.Game
                 return false;
 
             _items.Remove(item.Id);
-            _expiredItems.TryRemove(item.Id, out _);
             if (item.Exists)
                 _itemsToRemove.Push(item);
 

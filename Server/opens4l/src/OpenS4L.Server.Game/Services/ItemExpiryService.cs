@@ -11,10 +11,10 @@ namespace OpenS4L.Server.Game.Services
 {
     /// <summary>
     /// Periodically expires hour/day period items of online players: an item whose time is up is
-    /// unequipped and refreshed on the client (<see cref="PlayerInventory.UpdateExpiredItems"/>).
-    /// Items already expired at login are handled while loading. Nothing is written here - the
-    /// unequip only dirties the character, which the <see cref="PlayerSaveService"/> write-behind
-    /// cycle persists.
+    /// unequipped and deleted (<see cref="PlayerInventory.UpdateExpiredItems"/>).
+    /// Items already expired at login are deleted while loading. Nothing is written here - the
+    /// unequip and delete are queued for the <see cref="PlayerSaveService"/> write-behind
+    /// cycle.
     /// </summary>
     public class ItemExpiryService : IHostedService
     {

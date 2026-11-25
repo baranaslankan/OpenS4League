@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
@@ -43,6 +44,10 @@ namespace OpenS4L.Server.Game.Services
             if (s.ItemIdsToRemove.Count > 0)
             {
                 var idsToRemove = s.ItemIdsToRemove;
+                // A character row may still point at an item being deleted (an expired or refunded item
+                // that was worn); the character columns are written after this, and the FKs have no
+                // ON DELETE action, so clear those references first or the delete fails.
+                await ClearCharacterReferences(db, s.AccountId, idsToRemove);
                 await db.PlayerItems.Where(x => idsToRemove.Contains(x.Id)).ExecuteDeleteAsync();
             }
 
@@ -81,6 +86,34 @@ namespace OpenS4L.Server.Game.Services
                     });
                 }
             }
+        }
+
+        private static async Task ClearCharacterReferences(GameContext db, int accountId, List<long> ids)
+        {
+            await db.PlayerCharacters.Where(x => x.PlayerId == accountId && x.Weapon1Id != null && ids.Contains(x.Weapon1Id.Value))
+                .ExecuteUpdateAsync(u => u.SetProperty(x => x.Weapon1Id, (long?)null));
+            await db.PlayerCharacters.Where(x => x.PlayerId == accountId && x.Weapon2Id != null && ids.Contains(x.Weapon2Id.Value))
+                .ExecuteUpdateAsync(u => u.SetProperty(x => x.Weapon2Id, (long?)null));
+            await db.PlayerCharacters.Where(x => x.PlayerId == accountId && x.Weapon3Id != null && ids.Contains(x.Weapon3Id.Value))
+                .ExecuteUpdateAsync(u => u.SetProperty(x => x.Weapon3Id, (long?)null));
+            await db.PlayerCharacters.Where(x => x.PlayerId == accountId && x.SkillId != null && ids.Contains(x.SkillId.Value))
+                .ExecuteUpdateAsync(u => u.SetProperty(x => x.SkillId, (long?)null));
+            await db.PlayerCharacters.Where(x => x.PlayerId == accountId && x.HairId != null && ids.Contains(x.HairId.Value))
+                .ExecuteUpdateAsync(u => u.SetProperty(x => x.HairId, (long?)null));
+            await db.PlayerCharacters.Where(x => x.PlayerId == accountId && x.FaceId != null && ids.Contains(x.FaceId.Value))
+                .ExecuteUpdateAsync(u => u.SetProperty(x => x.FaceId, (long?)null));
+            await db.PlayerCharacters.Where(x => x.PlayerId == accountId && x.ShirtId != null && ids.Contains(x.ShirtId.Value))
+                .ExecuteUpdateAsync(u => u.SetProperty(x => x.ShirtId, (long?)null));
+            await db.PlayerCharacters.Where(x => x.PlayerId == accountId && x.PantsId != null && ids.Contains(x.PantsId.Value))
+                .ExecuteUpdateAsync(u => u.SetProperty(x => x.PantsId, (long?)null));
+            await db.PlayerCharacters.Where(x => x.PlayerId == accountId && x.GlovesId != null && ids.Contains(x.GlovesId.Value))
+                .ExecuteUpdateAsync(u => u.SetProperty(x => x.GlovesId, (long?)null));
+            await db.PlayerCharacters.Where(x => x.PlayerId == accountId && x.ShoesId != null && ids.Contains(x.ShoesId.Value))
+                .ExecuteUpdateAsync(u => u.SetProperty(x => x.ShoesId, (long?)null));
+            await db.PlayerCharacters.Where(x => x.PlayerId == accountId && x.AccessoryId != null && ids.Contains(x.AccessoryId.Value))
+                .ExecuteUpdateAsync(u => u.SetProperty(x => x.AccessoryId, (long?)null));
+            await db.PlayerCharacters.Where(x => x.PlayerId == accountId && x.PetId != null && ids.Contains(x.PetId.Value))
+                .ExecuteUpdateAsync(u => u.SetProperty(x => x.PetId, (long?)null));
         }
 
         public static async Task WriteCharacters(GameContext db, PlayerSaveSnapshot s)
