@@ -11,7 +11,7 @@
 K6_IMAGE ?= grafana/k6:latest
 TARGET_URL ?= http://host.docker.internal:22000
 
-# Load-bot scenario (single-channel | all-channels | chat | all-channels-chat). Used by `loadbot`.
+# Load-bot scenario (single-channel | all-channels | chat | all-channels-chat | rooms). Used by `loadbot`.
 SCENARIO ?= single-channel
 
 COMPOSE = docker compose
@@ -117,7 +117,10 @@ loadbot: ## Simulate N real-game-protocol players (default BOTS=1, CHANNEL=4, PA
 	    $(if $(CHAT),--chat-endpoint $(CHAT),),) \
 	  $(if $(filter all-channels-chat,$(SCENARIO)),--per-channel $(if $(PER_CHANNEL),$(PER_CHANNEL),1) \
 	    --messages $(if $(MESSAGES),$(MESSAGES),10) \
-	    $(if $(CHAT),--chat-endpoint $(CHAT),),)
+	    $(if $(CHAT),--chat-endpoint $(CHAT),),) \
+	  $(if $(filter rooms,$(SCENARIO)),--rooms $(if $(ROOMS),$(ROOMS),1) --room-size $(if $(ROOM_SIZE),$(ROOM_SIZE),2) \
+	    --channel $(if $(CHANNEL),$(CHANNEL),4) $(if $(RULE),--rule $(RULE),) $(if $(MAP),--map $(MAP),),) \
+	  $(if $(REPORT),--report $(REPORT),) $(if $(TRACE),--trace,)
 
 loadbot-help: ## Explain all loadbot scenarios + parameters
 	@echo ""
@@ -137,6 +140,9 @@ loadbot-help: ## Explain all loadbot scenarios + parameters
 	@echo "  all-channels     P players in every existing channel (discovers them from /channels)."
 	@echo "  chat             N bots that also log into the chat server and send channel chat."
 	@echo "  all-channels-chat  P players in every channel, each sending M chat messages."
+	@echo "  rooms            R rooms of S bots; each room is created, joined, readied and started."
+	@echo ""
+	@echo "Every run ends with a latency table per step (p50/p95/p99/max ms, bot side)."
 	@echo ""
 	@echo "EXAMPLES"
 	@echo "  make loadbot                                   # 1 bot -> channel 4 (admin/admin)"
@@ -146,9 +152,11 @@ loadbot-help: ## Explain all loadbot scenarios + parameters
 	@echo "  make loadbot SCENARIO=chat BOTS=10 USERPREFIX=bot STAY=120   # 10 chatting bots"
 	@echo "  make loadbot SCENARIO=all-channels-chat PER_CHANNEL=10 MESSAGES=10 USERPREFIX=bot"
 	@echo "                     # 10 players in every channel, each sending 10 chat msgs"
+	@echo "  make loadbot SCENARIO=rooms ROOMS=10 ROOM_SIZE=4 USERPREFIX=bot STAY=60 REPORT=load.json"
+	@echo "                     # 10 four-player deathmatch rooms, latency report as JSON"
 	@echo ""
 	@echo "PARAMETERS (environment overrides)"
-	@echo "  SCENARIO     single-channel | all-channels | chat | all-channels-chat"
+	@echo "  SCENARIO     single-channel | all-channels | chat | all-channels-chat | rooms"
 	@echo "               (default single-channel)"
 	@echo "  BOTS         number of bots / players (count)         (default 1)"
 	@echo "  CHANNEL      channel id for single-channel            (default 4)"
@@ -159,6 +167,12 @@ loadbot-help: ## Explain all loadbot scenarios + parameters
 	@echo "  PASSWORD     account / bot password                   (default admin)"
 	@echo "  NICKPREFIX   nickname prefix                          (default bot)"
 	@echo "  STAY         seconds to stay online, 0=forever        (default 0)"
+	@echo "  ROOMS        rooms for the rooms scenario             (default 1)"
+	@echo "  ROOM_SIZE    bots per room                            (default 2)"
+	@echo "  RULE         game rule, e.g. deathmatch, touchdown    (default deathmatch)"
+	@echo "  MAP          map id; must suit RULE (default: 2 deathmatch, 61 touchdown)"
+	@echo "  REPORT       also write the latency table to this JSON file"
+	@echo "  TRACE        any value: print every protocol message (noisy)"
 	@echo "  AUTH         auth endpoint host:port                  (default 127.0.0.1:28002)"
 	@echo "  GAME         game endpoint host:port (override server list) (default: auto)"
 	@echo "  CHAT         chat endpoint host:port for chat scenario(default 127.0.0.1:28003)"

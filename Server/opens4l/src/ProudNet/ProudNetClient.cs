@@ -56,6 +56,15 @@ namespace ProudNet
         /// <summary>Raised for every decoded application RMI received from the server.</summary>
         public event EventHandler<MessageEventArgs> MessageReceived;
 
+        /// <summary>
+        /// Raised with the round trip of each keep-alive ReliablePing the client sends, measured to
+        /// the matching ReliablePong (TCP keeps them in order). Client-side only; no wire change.
+        /// </summary>
+        public event EventHandler<TimeSpan> RoundTrip;
+
+        private readonly System.Collections.Concurrent.ConcurrentQueue<long> _pingSentAt =
+            new System.Collections.Concurrent.ConcurrentQueue<long>();
+
         public event EventHandler<ProudNetClient> Connected;
         public event EventHandler<ProudNetClient> Disconnected;
         public event EventHandler<Exception> Error;
@@ -155,7 +164,10 @@ namespace ProudNet
                     // (e.g. a chat bot between game login and chat login) never gets closed.
                     await Task.Delay(TimeSpan.FromMilliseconds(500), _cts.Token);
                     if (IsConnected)
+                    {
+                        _pingSentAt.Enqueue(System.Diagnostics.Stopwatch.GetTimestamp());
                         Send(new ReliablePingMessage(), SendOptions.Reliable);
+                    }
                 }
             }
             catch (OperationCanceledException)
@@ -323,6 +335,9 @@ namespace ProudNet
 
             var message = factory.GetMessage(_serializer, opCode, r);
             Trace?.Invoke($"recv: app {message.GetType().Name} (opcode {opCode})");
+            if (message is ReliablePongMessage && _pingSentAt.TryDequeue(out var sentAt))
+                RoundTrip?.Invoke(this, System.Diagnostics.Stopwatch.GetElapsedTime(sentAt));
+
             MessageReceived?.Invoke(this, new MessageEventArgs(this, message));
         }
 

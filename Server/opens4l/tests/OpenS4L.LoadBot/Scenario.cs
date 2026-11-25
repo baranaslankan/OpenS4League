@@ -21,6 +21,9 @@ namespace OpenS4L.LoadBot
         public bool ChatOnly { get; init; }
         /// <summary>How many chat messages the bot sends (0 = loop until cancelled).</summary>
         public int ChatMessages { get; init; }
+        /// <summary>Rooms scenario: the room this bot plays in, and its place in it (0 = master).</summary>
+        public RoomGroup Room { get; init; }
+        public int RoomMember { get; init; }
     }
 
     /// <summary>
@@ -46,6 +49,8 @@ namespace OpenS4L.LoadBot
         public string NickPrefix { get; set; } = "bot";
         public int StaySeconds { get; set; }
         public string WebApiBase { get; set; }
+        public string ReportPath { get; set; }
+        public bool Trace { get; set; }
     }
 
     /// <summary>Default scenario: N bots all into one channel (the original --count/--channel behaviour).</summary>
@@ -205,6 +210,56 @@ namespace OpenS4L.LoadBot
                         ChatMessages = _messagesPerBot
                     });
                     idx++;
+                }
+            }
+
+            return specs;
+        }
+    }
+
+    /// <summary>
+    /// Scenario: R rooms of S bots each, all in one channel. Per room, bot 0 creates the room and
+    /// the others join it; everyone but the master readies up, the master starts the round and
+    /// all of them load in, so every room ends up in a running match.
+    /// </summary>
+    public class RoomsScenario : IScenario
+    {
+        public string Name => "rooms";
+        public string Description => "R rooms of S bots, each room starting a match";
+
+        private readonly int _rooms;
+        private readonly int _roomSize;
+        private readonly uint _channel;
+        private readonly GameRule _rule;
+        private readonly byte _map;
+
+        public RoomsScenario(int rooms, int roomSize, uint channel, GameRule rule, byte map)
+        {
+            _rooms = rooms;
+            _roomSize = roomSize;
+            _channel = channel;
+            _rule = rule;
+            _map = map;
+        }
+
+        public IReadOnlyList<BotSpec> Create(ScenarioContext ctx)
+        {
+            var specs = new List<BotSpec>();
+            for (var r = 0; r < _rooms; r++)
+            {
+                var group = new RoomGroup(r, _roomSize, _rule, _map);
+                for (var m = 0; m < _roomSize; m++)
+                {
+                    var idx = r * _roomSize + m;
+                    specs.Add(new BotSpec
+                    {
+                        Index = idx,
+                        Username = ctx.UserPrefix != null ? $"{ctx.UserPrefix}{idx}" : ctx.User,
+                        Nickname = $"{ctx.NickPrefix}{idx}",
+                        Channel = _channel,
+                        Room = group,
+                        RoomMember = m
+                    });
                 }
             }
 

@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
@@ -6,9 +7,12 @@ using OpenS4L;
 using OpenS4L.Blub.Serialization;
 using OpenS4L.Network;
 using OpenS4L.Network.Data.Auth;
+using OpenS4L.Network.Data.Game;
+using OpenS4L.Network.Data.GameRule;
 using OpenS4L.Network.Message.Auth;
 using OpenS4L.Network.Message.Chat;
 using OpenS4L.Network.Message.Game;
+using OpenS4L.Network.Message.GameRule;
 using ProudNet;
 using ProudNet.Serialization;
 
@@ -16,8 +20,10 @@ namespace OpenS4L.LoadBot
 {
     /// <summary>
     /// One simulated player: connects to the auth server, logs in, connects to the game server,
-    /// and enters a channel. A real (network-valid) ProudNet client on the wire, so the bot shows
-    /// up in the game server's PlayerManager and thus in the admin console (/players, /channels).
+    /// and enters a channel; in the rooms scenario it then joins a room and plays a round. A real
+    /// (network-valid) ProudNet client on the wire, so the bot shows up in the game server's
+    /// PlayerManager and thus in the admin console (/players, /channels). Every request/reply step
+    /// and the keep-alive round trip are recorded in <see cref="Metrics"/>.
     /// </summary>
     public class Bot
     {
@@ -38,6 +44,8 @@ namespace OpenS4L.LoadBot
         private readonly uint _channelId;
         private readonly string _nickname;
         private readonly int _chatMessages;
+        private readonly RoomGroup _room;
+        private readonly int _roomMember;
 
         public int Index { get; }
 
@@ -46,8 +54,11 @@ namespace OpenS4L.LoadBot
 
         public Bot(BlubSerializer serializer, MessageFactory[] factories, int index,
             IPEndPoint authEndPoint, IPEndPoint gameEndPoint, string username, string password,
-            uint channelId, string nickname, IPEndPoint chatEndPoint = null, int chatMessages = 0)
+            uint channelId, string nickname, IPEndPoint chatEndPoint = null, int chatMessages = 0,
+            RoomGroup room = null, int roomMember = 0)
         {
+            _room = room;
+            _roomMember = roomMember;
             _serializer = serializer;
             _factories = factories;
             Index = index;
@@ -67,11 +78,16 @@ namespace OpenS4L.LoadBot
             auth.Client.Trace = Trace;
             auth.Client.Error += (_, ex) => Log("auth error: {0}", ex.Message);
             auth.Client.Disconnected += (_, __) => Log("auth disconnected");
+            auth.Client.RoundTrip += (_, rtt) => Metrics.Record("ping.auth", rtt);
             Log("connecting to auth {0}", _authEndPoint);
 
-            await auth.Client.ConnectAsync(_authEndPoint, AuthVersion, ct);
+            var step = Metrics.Start("auth.connect");
+            await Guard(step, auth.Client.ConnectAsync(_authEndPoint, AuthVersion, ct));
+            step.Done();
 
             // 1. Auth login
+            step = Metrics.Start("auth.login");
+            var loginWait = auth.WaitFor<LoginEUAckMessage>(TimeSpan.FromSeconds(10));
             auth.Client.Send(new LoginEUReqMessage
             {
                 Username = _username,
@@ -80,12 +96,15 @@ namespace OpenS4L.LoadBot
                 Unk8 = "", Unk9 = "", Token = new AeriaTokenDto(), Unk10 = ""
             });
 
-            var loginAck = await auth.WaitFor<LoginEUAckMessage>(TimeSpan.FromSeconds(10));
+            var loginAck = await Guard(step, loginWait);
             if (loginAck.Result != AuthLoginResult.OK)
             {
+                step.Failed();
                 Log("auth login rejected: {0}", loginAck.Result);
                 return false;
             }
+
+            step.Done();
 
             Log("auth login OK (account {0}, session {1})", loginAck.AccountId, loginAck.SessionId);
 
@@ -97,8 +116,11 @@ namespace OpenS4L.LoadBot
             var serverListDeadline = DateTime.UtcNow.AddSeconds(60);
             while (gameInfo == null && DateTime.UtcNow < serverListDeadline)
             {
+                step = Metrics.Start("auth.serverlist");
+                var listWait = auth.WaitFor<ServerListAckMessage>(TimeSpan.FromSeconds(10));
                 auth.Client.Send(new ServerListReqMessage());
-                var serverList = await auth.WaitFor<ServerListAckMessage>(TimeSpan.FromSeconds(10));
+                var serverList = await Guard(step, listWait);
+                step.Done();
                 foreach (var s in serverList.ServerList)
                 {
                     if (s.Type == ServerType.Game && s.IsEnabled)
@@ -136,9 +158,14 @@ namespace OpenS4L.LoadBot
                 else if (e.Message is ChannelListInfoAckMessage)
                     Log("game result: got channel list");
             };
+            game.Client.RoundTrip += (_, rtt) => Metrics.Record("ping.game", rtt);
             Log("connecting to game {0}", gameEndPoint);
-            await game.Client.ConnectAsync(gameEndPoint, GameVersion, ct);
+            step = Metrics.Start("game.connect");
+            await Guard(step, game.Client.ConnectAsync(gameEndPoint, GameVersion, ct));
+            step.Done();
 
+            step = Metrics.Start("game.login");
+            var gameWait = game.WaitFor<LoginReguestAckMessage>(TimeSpan.FromSeconds(10));
             game.Client.Send(new LoginRequestReqMessage
             {
                 Username = _username,
@@ -150,8 +177,10 @@ namespace OpenS4L.LoadBot
                 AeriaToken = new AeriaTokenDto()
             });
 
-            var gameAck = await game.WaitFor<LoginReguestAckMessage>(TimeSpan.FromSeconds(10));
+            var gameAck = await Guard(step, gameWait);
             Log("game login ack result={0}", gameAck.Result);
+            if (gameAck.Result == GameLoginResult.OK || gameAck.Result == GameLoginResult.ChooseNickname)
+                step.Done();
             if (gameAck.Result == GameLoginResult.ChooseNickname)
             {
                 Log("game login: nickname required, creating character '{0}'", _nickname);
@@ -172,6 +201,7 @@ namespace OpenS4L.LoadBot
             }
             else if (gameAck.Result != GameLoginResult.OK)
             {
+                step.Failed();
                 Log("game login failed: {0}", gameAck.Result);
                 return false;
             }
@@ -184,8 +214,25 @@ namespace OpenS4L.LoadBot
             // online). Chat login (server-side OnChatLogin) looks the player up there, so a
             // chat bot MUST be in a game channel for chat login to succeed.
             Log("entering channel {0}", _channelId);
+            step = Metrics.Start("game.channel");
+            var channelWait = game.WaitFor<ServerResultAckMessage>(TimeSpan.FromSeconds(10),
+                m => m.Result == ServerResult.ChannelEnter || m.Result == ServerResult.JoinChannelFailed ||
+                     m.Result == ServerResult.ChannelLimitReached || m.Result == ServerResult.NonExistingChannel);
             game.Client.Send(new ChannelEnterReqMessage { Channel = _channelId });
+            var channelAck = await Guard(step, channelWait);
+            if (channelAck.Result != ServerResult.ChannelEnter)
+            {
+                step.Failed();
+                Log("channel {0} refused: {1}", _channelId, channelAck.Result);
+                return false;
+            }
+
+            step.Done();
             Log("bot {0} online in channel {1}", Index, _channelId);
+
+            // 4b. Rooms scenario: join (or create) the group's room and play a round.
+            if (_room != null && !await DoRoomAsync(game, loginAck.AccountId, ct))
+                return false;
 
             // 5. If a chat endpoint is configured, also connect to the chat server and chat.
             if (_chatEndPoint != null)
@@ -211,8 +258,11 @@ namespace OpenS4L.LoadBot
             chat.Client.Error += (_, ex) => Log("chat error: {0}", ex.Message);
             chat.Client.Disconnected += (_, __) => Log("chat disconnected");
 
+            chat.Client.RoundTrip += (_, rtt) => Metrics.Record("ping.chat", rtt);
             Log("connecting to chat {0}", _chatEndPoint);
-            await chat.Client.ConnectAsync(_chatEndPoint, ChatVersion, ct);
+            var step = Metrics.Start("chat.connect");
+            await Guard(step, chat.Client.ConnectAsync(_chatEndPoint, ChatVersion, ct));
+            step.Done();
 
             // The game server sets Account.Nickname while handling CharacterFirstCreate, and
             // ProudNet does not wait for one handler to finish before dispatching the next, so
@@ -222,6 +272,8 @@ namespace OpenS4L.LoadBot
             LoginAckMessage ack = null;
             for (var attempt = 1; attempt <= 5; attempt++)
             {
+                step = Metrics.Start("chat.login");
+                var chatWait = chat.WaitFor<LoginAckMessage>(TimeSpan.FromSeconds(10));
                 chat.Client.Send(new LoginReqMessage
                 {
                     AccountId = accountId,
@@ -229,7 +281,7 @@ namespace OpenS4L.LoadBot
                     SessionId = sessionId
                 });
 
-                ack = await chat.WaitFor<LoginAckMessage>(TimeSpan.FromSeconds(10));
+                ack = await Guard(step, chatWait);
                 if (ack.Result != 3)
                     break;
 
@@ -239,9 +291,12 @@ namespace OpenS4L.LoadBot
 
             if (ack.Result != 0)
             {
+                step.Failed();
                 Log("chat login failed: result {0}", ack.Result);
                 return false;
             }
+
+            step.Done();
 
             Log("chat login OK — chatting as '{0}'", _nickname);
 
@@ -280,6 +335,157 @@ namespace OpenS4L.LoadBot
 
             Log("bot {0} chat done ({1} message(s) sent)", Index, n);
             return true;
+        }
+
+        /// <summary>
+        /// Rooms scenario. The master (member 0) creates the room; the others join it once it
+        /// exists. Everyone but the master readies up, the master starts the round, and each bot
+        /// reports loading done. Steps: room.make / room.enter (request to the master-change ack
+        /// that ends the join), room.ready, room.loading (master's begin request to this bot's
+        /// loading ack) and room.start (loading done to the game-start ack; this includes the
+        /// server's 5 s start countdown). The client's relay (P2P) connection is not simulated.
+        /// </summary>
+        private async Task<bool> DoRoomAsync(ServerConnection game, ulong accountId, CancellationToken ct)
+        {
+            var isMaster = _roomMember == 0;
+            var joinTimeout = TimeSpan.FromSeconds(10);
+            try
+            {
+                uint roomId;
+                var step = Metrics.Start(isMaster ? "room.make" : "room.enter");
+                if (isMaster)
+                {
+                    var infoWait = game.WaitFor<RoomEnterRoomInfoAck2Message>(joinTimeout);
+                    var refusedWait = game.WaitFor<ServerResultAckMessage>(joinTimeout,
+                        m => m.Result == ServerResult.FailedToRequestTask);
+                    game.Client.Send(new RoomMakeReq2Message
+                    {
+                        Room = new MakeRoom2Dto
+                        {
+                            Name = $"loadbot {_room.Number}",
+                            GameRule = _room.Rule,
+                            Map = _room.Map,
+                            PlayerLimit = (byte)Math.Max(_room.Size, 8),
+                            ScoreLimit = 100,
+                            TimeLimit = TimeSpan.FromMinutes(30),
+                            ItemLimit = 0,
+                            Password = "",
+                            IsSpectatingEnabled = false,
+                            SpectatorLimit = 0
+                        }
+                    });
+                    if (await Task.WhenAny(infoWait, refusedWait) == refusedWait && refusedWait.IsCompletedSuccessfully)
+                    {
+                        step.Failed();
+                        throw new InvalidOperationException(
+                            $"room refused (FailedToRequestTask): is map {_room.Map} valid for {_room.Rule}?");
+                    }
+
+                    roomId = (await Guard(step, infoWait)).Room.RoomId;
+                }
+                else
+                {
+                    // Not part of the step: the master may still be logging in.
+                    roomId = await _room.RoomId.Task.WaitAsync(TimeSpan.FromSeconds(120), ct);
+                    step = Metrics.Start("room.enter");
+                    var infoWait = game.WaitFor<RoomEnterRoomInfoAck2Message>(joinTimeout);
+                    game.Client.Send(new RoomEnterReqMessage { RoomId = roomId, Password = "" });
+                    await Guard(step, infoWait);
+                }
+
+                // The client sends this once it is connected to the relay; the server then
+                // finishes the join (name tags, master/referee, briefing).
+                var masterWait = game.WaitFor<RoomChangeMasterAckMessage>(joinTimeout);
+                game.Client.Send(new RoomEnterPlayerReqMessage());
+                await Guard(step, masterWait);
+                step.Done();
+                Log("bot {0} in room {1} ({2})", Index, roomId, isMaster ? "master" : "member");
+
+                if (isMaster)
+                    _room.RoomId.TrySetResult(roomId);
+                _room.Joined();
+                await _room.AllJoined.Task.WaitAsync(TimeSpan.FromSeconds(120), ct);
+
+                // Registered before anyone can start the round, so no loading ack is missed.
+                var loadingWait = game.WaitFor<RoomGameLoadingAckMessage>(TimeSpan.FromSeconds(120));
+
+                if (!isMaster)
+                {
+                    step = Metrics.Start("room.ready");
+                    var readyWait = game.WaitFor<RoomReadyRoundAckMessage>(joinTimeout,
+                        m => m.AccountId == accountId && m.IsReady);
+                    game.Client.Send(new RoomReadyRoundReq2Message { IsReady = true, EquipCheck = NewEquipCheck() });
+                    await Guard(step, readyWait);
+                    step.Done();
+                    _room.Ready();
+                }
+                else
+                {
+                    if (_room.Size > 1)
+                        await _room.AllReady.Task.WaitAsync(TimeSpan.FromSeconds(120), ct);
+
+                    Interlocked.Exchange(ref _room.BeginTimestamp, System.Diagnostics.Stopwatch.GetTimestamp());
+                    game.Client.Send(new RoomBeginRoundReq2Message { IsReady = true, EquipCheck = NewEquipCheck() });
+                }
+
+                step = Metrics.Start("room.loading");
+                await Guard(step, loadingWait);
+                var begin = Interlocked.Read(ref _room.BeginTimestamp);
+                if (begin != 0)
+                    Metrics.Record("room.loading", System.Diagnostics.Stopwatch.GetElapsedTime(begin));
+
+                step = Metrics.Start("room.start");
+                var startWait = game.WaitFor<RoomGameStartAckMessage>(TimeSpan.FromSeconds(60));
+                game.Client.Send(new GameLoadingSuccessReqMessage());
+                await Guard(step, startWait);
+                step.Done();
+                Log("bot {0} playing in room {1}", Index, roomId);
+                return true;
+            }
+            catch (Exception ex) when (!(ex is OperationCanceledException))
+            {
+                Log("room flow failed: {0}", ex.Message);
+                _room.Abort($"bot {Index}: {ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Equip snapshot the client sends with ready/begin. The server checks the equipment it
+        /// tracks itself, so empty slots are enough; the fixed-size arrays must still be full.
+        /// </summary>
+        private static EquipCheckDto NewEquipCheck() => new EquipCheckDto
+        {
+            Weapons = Enumerable.Range(0, 3).Select(_ => new ItemCheckDto()).ToArray(),
+            Skill = new ItemCheckDto(),
+            Costumes = Enumerable.Range(0, 8).Select(_ => new ItemCheckDto()).ToArray()
+        };
+
+        /// <summary>Await <paramref name="task"/>, counting a timeout or error as a failure of the step.</summary>
+        private static async Task Guard(Metrics.StepTimer step, Task task)
+        {
+            try
+            {
+                await task;
+            }
+            catch
+            {
+                step.Failed();
+                throw;
+            }
+        }
+
+        private static async Task<T> Guard<T>(Metrics.StepTimer step, Task<T> task)
+        {
+            try
+            {
+                return await task;
+            }
+            catch
+            {
+                step.Failed();
+                throw;
+            }
         }
 
         private void Log(string message, params object[] args)
