@@ -56,5 +56,8 @@ pnpm run dev
 ## Configuration
 
 - Port: set the `PORT` env var (default `8020`).
+- Game WebApi: `GAME_API` (default `http://127.0.0.1:22000`). `ADMIN_KEY`: sent as the
+  `X-Admin-Key` header on moderation calls; set it to the WebApi's `AdminKey` when the game
+  server has one (any public deployment does, see `docs/ORACLE-DEPLOY.md`).
 - Server configs are read from `Server/opens4l/src/OpenS4L.Server.<Name>/config.hjson`;
   logs are tailed from `Server/opens4l/dist/<name>/logs`.

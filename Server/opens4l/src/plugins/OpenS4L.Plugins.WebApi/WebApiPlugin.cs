@@ -22,6 +22,8 @@ namespace OpenS4L.Plugins.WebApi
             _configuration = new ConfigurationBuilder()
                 .SetBasePath(AppDomain.CurrentDomain.BaseDirectory)
                 .AddHjsonFile(path, false, true)
+                // OPENS4L_WEBAPI_ADMINKEY etc., so a deployment keeps secrets out of webapi.hjson
+                .AddEnvironmentVariables("OPENS4L_WEBAPI_")
                 .Build();
         }
 

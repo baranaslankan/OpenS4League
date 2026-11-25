@@ -238,6 +238,46 @@ namespace OpenS4L.Server.Mapping.Tests
             Assert.NotNull(rooms);
         }
 
+        [Fact]
+        public async Task Get_metrics_aggregates_rooms_without_secrets()
+        {
+            using (var db = _ctx.Get<GameContext>())
+            {
+                db.Channels.Add(new ChannelEntity { Id = 1, Name = "C", Description = "d", PlayerLimit = 32, Color = "FF0000", MinLevel = 0, MaxLevel = 99 });
+                await db.SaveChangesAsync();
+            }
+            await _ctx.Get<ChannelService>().StartAsync(System.Threading.CancellationToken.None);
+
+            var plr = await LoginAsync(3201);
+            await _ctx.Get<ChannelHandler>().OnHandle(new MessageContext { Session = plr.Session },
+                new ChannelEnterReqMessage { Channel = 1 });
+            await _ctx.Get<RoomHandler>().OnHandle(new MessageContext { Session = plr.Session }, new RoomMakeReq2Message
+            {
+                Room = new OpenS4L.Network.Data.Game.MakeRoom2Dto
+                {
+                    Name = "MetricsRoom", GameRule = GameRule.Practice, Map = 3, PlayerLimit = 8,
+                    ScoreLimit = 5, TimeLimit = TimeSpan.FromMinutes(10), ItemLimit = 1,
+                    Password = "hunter2", IsSpectatingEnabled = false, SpectatorLimit = 0
+                }
+            });
+            Assert.NotNull(plr.Room);
+
+            var json = await _client.GetStringAsync("/metrics");
+            Assert.DoesNotContain("hunter2", json);
+            Assert.DoesNotContain("nick3201", json);
+
+            var metrics = System.Text.Json.JsonSerializer.Deserialize<OpenS4L.Plugins.WebApi.Models.MetricsDto>(json);
+            Assert.Equal(1, metrics.PlayersOnline);
+            Assert.Equal(1, metrics.Rooms.Total);
+            Assert.Equal(1, metrics.Rooms.PlayersInRooms);
+            Assert.Equal(1, metrics.Rooms.ByRule["Practice"]);
+            var channel = Assert.Single(metrics.Channels);
+            Assert.Equal(1, channel.PlayersOnline);
+            Assert.Equal(1, channel.Rooms);
+            Assert.True(metrics.Process.WorkingSetMb > 0);
+            Assert.InRange(metrics.Process.CpuPercent, 0, 100);
+        }
+
         private sealed class CtxProvider : IServiceProvider
         {
             private readonly GameTestContext _ctx;

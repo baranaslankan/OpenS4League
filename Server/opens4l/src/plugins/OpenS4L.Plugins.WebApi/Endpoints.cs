@@ -1,6 +1,8 @@
 using System;
 using System.Diagnostics;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -23,8 +25,32 @@ namespace OpenS4L.Plugins.WebApi
     /// </summary>
     public static class Endpoints
     {
-        public static void Map(WebApplication app, IServiceProvider services, Serilog.ILogger logger, WebApiMapper mapper)
+        public const string AdminKeyHeader = "X-Admin-Key";
+
+        public static void Map(WebApplication app, IServiceProvider services, Serilog.ILogger logger, WebApiMapper mapper,
+            string adminKey = null)
         {
+            // /admin/* runs console commands, bans and kicks. With an AdminKey configured, a request
+            // without the matching X-Admin-Key header is refused before it reaches any route.
+            if (!string.IsNullOrEmpty(adminKey))
+            {
+                var expected = Encoding.UTF8.GetBytes(adminKey);
+                app.Use(async (context, next) =>
+                {
+                    if (context.Request.Path.StartsWithSegments("/admin"))
+                    {
+                        var given = Encoding.UTF8.GetBytes(context.Request.Headers[AdminKeyHeader].ToString());
+                        if (!CryptographicOperations.FixedTimeEquals(given, expected))
+                        {
+                            context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                            return;
+                        }
+                    }
+
+                    await next();
+                });
+            }
+
             // GET /statistics
             app.MapGet("/statistics", () =>
             {
@@ -38,6 +64,44 @@ namespace OpenS4L.Plugins.WebApi
                 logger.ForContext<WebApiService>()
                     .Information("GetStatistics invoked: players={Players} uptime={Uptime}s peak={Peak}",
                         dto.PlayersOnline, dto.Uptime, dto.PeakPlayers);
+                return Results.Json(dto);
+            });
+
+            // GET /metrics — aggregates for the public status page (no nicknames, ids or passwords)
+            app.MapGet("/metrics", () =>
+            {
+                var uptime = DateTime.Now - Process.GetCurrentProcess().StartTime;
+                var players = services.GetRequiredService<PlayerManager>().Count;
+                StatisticsTracker.Record(players);
+
+                var channels = services.GetRequiredService<ChannelService>().ToArray();
+                var rooms = channels.SelectMany(c => c.RoomManager).ToArray();
+                var dto = new MetricsDto
+                {
+                    ServerTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+                    Uptime = (long)uptime.TotalSeconds,
+                    PlayersOnline = players,
+                    PeakPlayers = StatisticsTracker.PeakPlayers,
+                    Channels = channels.Select(c => new MetricsChannelDto
+                    {
+                        Id = c.Id,
+                        Name = c.Name,
+                        PlayersOnline = c.Players.Count,
+                        PlayerLimit = c.PlayerLimit,
+                        Rooms = c.RoomManager.Count
+                    }).ToArray(),
+                    Rooms = new MetricsRoomsDto
+                    {
+                        Total = rooms.Length,
+                        Playing = rooms.Count(r => r.GameRule.StateMachine.GameState == GameState.Playing),
+                        PlayersInRooms = rooms.Sum(r => r.Players.Count),
+                        ByRule = rooms.GroupBy(r => r.GameRule.GameRule.ToString())
+                            .ToDictionary(g => g.Key, g => g.Count()),
+                        ByState = rooms.GroupBy(r => r.GameRule.StateMachine.GameState.ToString())
+                            .ToDictionary(g => g.Key, g => g.Count())
+                    },
+                    Process = ProcessSampler.Sample()
+                };
                 return Results.Json(dto);
             });
 
