@@ -1,0 +1,29 @@
+# Public HTTP entry point of the prod stack (compose.prod.yaml).
+#
+#   /          the static status page from ./status
+#   /api/...   read-only WebApi routes, proxied to game:22000 with the /api prefix stripped
+#
+# Everything else under /api is refused: /admin/* (console commands, bans, kicks), /players
+# (nicknames, account ids) and /rooms (room passwords, player lists). /metrics carries the same
+# room numbers as aggregates. Add a route to @readonly only if it is safe for anyone to call.
+{$STATUS_SITE::80} {
+	encode gzip
+
+	handle_path /api/* {
+		@readonly {
+			method GET HEAD
+			path /statistics /metrics /channels /channels/* /gamedata/maps /gamedata/maps/*
+		}
+		handle @readonly {
+			reverse_proxy game:22000
+		}
+		handle {
+			respond 404
+		}
+	}
+
+	handle {
+		root * /srv/status
+		file_server
+	}
+}

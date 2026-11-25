@@ -1,7 +1,7 @@
 # OpenS4L — Docker run helper (Windows-first: git-bash/MSYS make + docker).
 # Builds/publishes the servers, stages the plugins, then brings up the compose stack.
 
-.PHONY: help build publish plugins up bootstrap provision provision-bots logs down clean loadtest loadtest-smoke loadtest-load loadtest-hundred loadtest-soak loadbot loadbot-help
+.PHONY: help build publish plugins up bootstrap provision provision-bots logs down clean loadtest loadtest-smoke loadtest-load loadtest-hundred loadtest-soak loadbot loadbot-help prod-up prod-provision prod-provision-bots prod-down prod-config
 
 # k6 load tests for the WebApi HTTP plugin (port 22000), via the official
 # grafana/k6 image (no local install; identical on macOS/Windows/Linux).
@@ -43,6 +43,25 @@ plugins: ## Stage plugin DLLs (+ config .hjson, + deps) into per-server plugins/
 
 up: ## Bring up the stack (PostgreSQL + Redis + 4 servers). Run `make publish` first.
 	$(COMPOSE) up -d
+
+# Public deployment: compose.prod.yaml layered on compose.yaml, settings from prod.env (see prod.env.example).
+COMPOSE_PROD = $(COMPOSE) --env-file prod.env -f compose.yaml -f compose.prod.yaml
+
+prod-config: ## Print the merged prod compose config (checks prod.env is complete)
+	$(COMPOSE_PROD) config
+
+prod-up: ## Bring up the public stack (game ports + Caddy status page). Run `make publish` first.
+	$(COMPOSE_PROD) up -d --build
+
+prod-provision: ## Create the admin account from prod.env + load the shop (idempotent)
+	$(COMPOSE_PROD) run --rm provision
+	$(COMPOSE_PROD) up -d --force-recreate game
+
+prod-provision-bots: ## Create load-test accounts bot0..botN-1 with BOT_PASSWORD from prod.env (make prod-provision-bots BOTS=40)
+	$(COMPOSE_PROD) run --rm -e ONLY_BOTS=1 -e BOT_COUNT=$(if $(BOTS),$(BOTS),40) provision
+
+prod-down: ## Stop the public stack (keeps the database volume)
+	$(COMPOSE_PROD) down
 
 bootstrap: ## Full first-time bring-up: publish, stage plugins, up, provision, reload game
 	$(MAKE) publish

@@ -1,0 +1,84 @@
+# Public deployment override (e.g. an Oracle Cloud Always Free Ampere VM). Layered on compose.yaml:
+#
+#   cp prod.env.example prod.env   # fill in PUBLIC_IP and the secrets
+#   make prod-up                    # = docker compose --env-file prod.env -f compose.yaml -f compose.prod.yaml up -d
+#
+# What changes against the local stack:
+# - The game ports (auth, chat, game, relay TCP + UDP) listen on every interface instead of 127.0.0.1.
+# - Postgres, Redis and the WebApi (22000) are NOT published to the internet. The WebApi stays on
+#   127.0.0.1 for the admin console over an SSH tunnel; its /admin/* routes also need ADMIN_KEY.
+# - Caddy (80/443) is the only HTTP entry point. It serves the status page and passes through only
+#   the read-only WebApi routes under /api (see Caddyfile).
+# - The servers advertise PUBLIC_IP to clients instead of 127.0.0.1, and every secret comes from
+#   prod.env through OPENS4L_* environment variables, so the tracked config.hjson files stay as is.
+#
+# `!override` / `!reset` need Docker Compose 2.24 or newer.
+
+x-db: &db
+  OPENS4L_Database__ConnectionStrings__Auth: Host=postgres;Port=5432;Database=auth;Username=postgres;Password=${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in prod.env};
+  OPENS4L_Database__ConnectionStrings__Game: Host=postgres;Port=5432;Database=game;Username=postgres;Password=${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in prod.env};
+
+services:
+  postgres:
+    ports: !reset []
+
+  redis:
+    ports: !reset []
+
+  auth:
+    environment:
+      <<: *db
+    ports: !override
+      - "28002:28002"
+
+  chat:
+    environment:
+      <<: *db
+      OPENS4L_ServerList__Address: ${PUBLIC_IP:?set PUBLIC_IP in prod.env}
+    ports: !override
+      - "28003:28003"
+
+  game:
+    environment:
+      <<: *db
+      OPENS4L_ServerList__Address: ${PUBLIC_IP:?set PUBLIC_IP in prod.env}
+      OPENS4L_RelayEndPoint: ${PUBLIC_IP:?set PUBLIC_IP in prod.env}:28005
+      OPENS4L_WEBAPI_ADMINKEY: ${ADMIN_KEY:?set ADMIN_KEY in prod.env}
+    ports: !override
+      - "28104:28104"
+      - "127.0.0.1:22000:22000"
+
+  relay:
+    environment:
+      <<: *db
+      OPENS4L_Network__Address: ${PUBLIC_IP:?set PUBLIC_IP in prod.env}
+    ports: !override
+      - "28005:28005"
+      - "29000:29000/udp"
+      - "29001:29001/udp"
+
+  provision:
+    environment:
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD in prod.env}
+      # Load-test accounts (make prod-provision-bots) must not keep the default password "admin".
+      BOT_PASSWORD: ${BOT_PASSWORD:?set BOT_PASSWORD in prod.env}
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: opens4l-caddy
+    environment:
+      # A domain (status.example.com) gets automatic HTTPS; without one Caddy serves plain HTTP on :80.
+      STATUS_SITE: ${STATUS_SITE:-:80}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./status:/srv/status:ro
+      - caddy-data:/data
+    depends_on:
+      - game
+    restart: unless-stopped
+
+volumes:
+  caddy-data:
